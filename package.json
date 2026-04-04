@@ -1,0 +1,19 @@
+{
+  "name": "portfolio-tracker",
+  "version": "1.0.0",
+  "description": "Full-stack Trading 212 portfolio tracker with SQLite persistence",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "cd server && npx nodemon index.js",
+    "dev:client": "cd client && npx vite --port 5173",
+    "build": "cd client && npx vite build",
+    "start": "node server/index.js",
+    "install:all": "npm install && cd server && npm install && cd ../client && npm install",
+    "postinstall": "cd server && npm install && cd ../client && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "nodemon": "^3.1.0"
+  }
+}
