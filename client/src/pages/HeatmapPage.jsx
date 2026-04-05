@@ -55,13 +55,22 @@ function CustomContent(props) {
   // Stock tile
   const bgColor = props.fill || getPctColor(pctChange, failed);
   const sign = (pctChange >= 0) ? '+' : '';
-  const label = ticker || name;
+  const cleanTicker = (ticker || name)
+    .replace(/_US_EQ$/, '')
+    .replace(/_EQ$/, '')
+    .replace(/l$/, '');
+  const label = (name && name !== ticker) ? name : cleanTicker;
 
   return (
     <g
       onMouseEnter={(e) => onTileMouseEnter && onTileMouseEnter(e, props)}
       onMouseLeave={() => onTileMouseLeave && onTileMouseLeave()}
     >
+      <defs>
+        <clipPath id={`clip-${x}-${y}`}>
+          <rect x={x + 2} y={y + 2} width={width - 4} height={height - 4} />
+        </clipPath>
+      </defs>
       <rect
         x={x} y={y} width={width} height={height}
         fill={bgColor}
@@ -70,33 +79,37 @@ function CustomContent(props) {
         rx={2}
         style={{ cursor: 'default' }}
       />
-      {width > 40 && height > 28 && (
-        <text
-          x={x + width / 2}
-          y={y + height / 2 - (height > 52 ? 10 : 0)}
-          textAnchor="middle"
-          fill="white"
-          fontSize={Math.min(14, Math.floor(width / 5))}
-          fontWeight={700}
-          dominantBaseline="middle"
-          style={{ pointerEvents: 'none', userSelect: 'none' }}
-        >
-          {label}
-        </text>
-      )}
-      {width > 60 && height > 52 && (
-        <text
-          x={x + width / 2}
-          y={y + height / 2 + 12}
-          textAnchor="middle"
-          fill="rgba(255,255,255,0.85)"
-          fontSize={10}
-          dominantBaseline="middle"
-          style={{ pointerEvents: 'none', userSelect: 'none' }}
-        >
-          {`${sign}${typeof pctChange === 'number' ? pctChange.toFixed(2) : '0.00'}%`}
-        </text>
-      )}
+      <g clipPath={`url(#clip-${x}-${y})`}>
+        {width > 40 && height > 28 && (
+          <text
+            x={x + width / 2}
+            y={y + height / 2 - (height > 52 ? 10 : 0)}
+            textAnchor="middle"
+            fill="white"
+            fontSize={Math.min(14, Math.floor(width / 5))}
+            fontWeight={700}
+            dominantBaseline="middle"
+            textLength={label.length * 8 > width - 16 ? Math.max(0, width - 16) : undefined}
+            lengthAdjust="spacingAndGlyphs"
+            style={{ pointerEvents: 'none', userSelect: 'none' }}
+          >
+            {label}
+          </text>
+        )}
+        {width > 60 && height > 52 && (
+          <text
+            x={x + width / 2}
+            y={y + height / 2 + 12}
+            textAnchor="middle"
+            fill="rgba(255,255,255,0.85)"
+            fontSize={10}
+            dominantBaseline="middle"
+            style={{ pointerEvents: 'none', userSelect: 'none' }}
+          >
+            {`${sign}${typeof pctChange === 'number' ? pctChange.toFixed(2) : '0.00'}%`}
+          </text>
+        )}
+      </g>
       {failed && width > 20 && height > 20 && (
         <text
           x={x + width - 14} y={y + 14}
