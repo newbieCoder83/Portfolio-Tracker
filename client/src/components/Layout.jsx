@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
 import {
-  AppBar, Toolbar, Typography, Button, Box, CircularProgress, Chip,
+  AppBar, Toolbar, Typography, Button, Box, CircularProgress, Chip, Tabs, Tab,
 } from '@mui/material';
 import SyncIcon from '@mui/icons-material/Sync';
 import LogoutIcon from '@mui/icons-material/Logout';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 
-export default function Layout({ children, onSyncComplete }) {
+export default function Layout({ children, onSyncComplete, currentPage = 'dashboard', onNavigate = () => {} }) {
   const { logout, lastSync, setLastSync, environment } = useAuth();
   const [syncing, setSyncing] = useState(false);
 
@@ -66,6 +66,22 @@ export default function Layout({ children, onSyncComplete }) {
           >
             Logout
           </Button>
+        </Toolbar>
+        <Toolbar
+          variant="dense"
+          disableGutters
+          sx={{ px: 2, minHeight: 36, borderTop: '1px solid rgba(255,255,255,0.06)' }}
+        >
+          <Tabs
+            value={currentPage}
+            onChange={(_, val) => onNavigate(val)}
+            textColor="inherit"
+            TabIndicatorProps={{ style: { backgroundColor: '#5c6bc0' } }}
+            sx={{ '& .MuiTab-root': { minHeight: 36, fontSize: '0.8rem', textTransform: 'none', minWidth: 100 } }}
+          >
+            <Tab label="Dashboard" value="dashboard" />
+            <Tab label="Heatmap" value="heatmap" />
+          </Tabs>
         </Toolbar>
       </AppBar>
       <Box sx={{ p: 3 }}>

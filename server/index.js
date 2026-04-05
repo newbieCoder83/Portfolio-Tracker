@@ -26,6 +26,7 @@ app.use('/api/auth', require('./routes/auth'));
 // All other API routes require authentication
 app.use('/api/account', requireAuth, require('./routes/account'));
 app.use('/api/portfolio', requireAuth, require('./routes/portfolio'));
+app.use('/api/heatmap', requireAuth, require('./routes/heatmap'));
 app.use('/api/history', requireAuth, require('./routes/history'));
 app.use('/api/sync', requireAuth, require('./routes/sync'));
 app.use('/api', requireAuth, require('./routes/sync')); // mount snapshots under /api too

@@ -13,7 +13,7 @@ import DividendHistoryTable from '../components/DividendHistoryTable';
 import PortfolioValueChart from '../components/PortfolioValueChart';
 import api from '../api/client';
 
-export default function DashboardPage() {
+export default function DashboardPage({ onNavigate }) {
   const [data, setData] = useState({
     summary: null,
     positions: [],
@@ -54,7 +54,7 @@ export default function DashboardPage() {
 
   if (loading) {
     return (
-      <Layout onSyncComplete={fetchAll}>
+      <Layout onSyncComplete={fetchAll} currentPage="dashboard" onNavigate={onNavigate}>
         <Box sx={{ display: 'flex', justifyContent: 'center', mt: 10 }}>
           <CircularProgress />
         </Box>
@@ -63,7 +63,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <Layout onSyncComplete={fetchAll}>
+    <Layout onSyncComplete={fetchAll} currentPage="dashboard" onNavigate={onNavigate}>
       <SummaryCards summary={data.summary} totalDividends={totalDividends} />
 
       {/* Row 1: Allocation pie + Portfolio value chart */}
