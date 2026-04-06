@@ -21,6 +21,9 @@ function getPctColor(pct, failed) {
   return `rgb(${r},${g},${b})`;
 }
 
+// Label queue — filled during Recharts render pass, drawn in overlay SVG
+let _labelQueue = [];
+
 // Custom SVG renderer for each treemap tile.
 // Recharts adds an invisible root at depth 0.
 // depth 1 = sector, depth 2 = industry, depth 3 = stock tile.
@@ -35,59 +38,28 @@ function CustomContent(props) {
     return <g />;
   }
 
-  // depth 1: Sector header block
+  // depth 1: Sector block — render rect only, queue label for overlay
   if (depth === 1) {
-    const HEADER_H = 24;
+    if (width > 50 && height > 24) {
+      _labelQueue.push({ type: 'sector', x, y, width, name });
+    }
     return (
       <g>
-        <rect
-          x={x} y={y} width={width} height={height}
-          fill="rgba(255,255,255,0.03)"
-          stroke="#ffffff"
-          strokeWidth={2}
-        />
-        {width > 50 && height > HEADER_H && (
-          <g>
-            <rect
-              x={x} y={y} width={width} height={HEADER_H}
-              fill="rgba(0,0,0,0.6)"
-            />
-            <text
-              x={x + 6} y={y + 16}
-              fill="#ffffff"
-              fontSize={11}
-              fontWeight={700}
-              style={{ pointerEvents: 'none', userSelect: 'none' }}
-            >
-              {name.toUpperCase()}
-            </text>
-          </g>
-        )}
+        <rect x={x} y={y} width={width} height={height}
+          fill="rgba(255,255,255,0.03)" stroke="#ffffff" strokeWidth={2} />
       </g>
     );
   }
 
-  // depth 2: Industry sub-block
+  // depth 2: Industry sub-block — render rect only, queue label for overlay
   if (depth === 2) {
+    if (width > 80 && height > 30) {
+      _labelQueue.push({ type: 'industry', x, y, width, name });
+    }
     return (
       <g>
-        <rect
-          x={x} y={y} width={width} height={height}
-          fill="none"
-          stroke="rgba(255,255,255,0.12)"
-          strokeWidth={1}
-        />
-        {width > 80 && height > 30 && (
-          <text
-            x={x + 4} y={y + 11}
-            fill="#888888"
-            fontSize={9}
-            fontStyle="italic"
-            style={{ pointerEvents: 'none', userSelect: 'none' }}
-          >
-            {name}
-          </text>
-        )}
+        <rect x={x} y={y} width={width} height={height}
+          fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth={1} />
       </g>
     );
   }
@@ -198,6 +170,7 @@ export default function HeatmapPage({ onNavigate }) {
 
   // Build nested Recharts Treemap data: [{ name: sector, children: [...stocks] }]
   const treemapData = useMemo(() => {
+    _labelQueue = [];
     if (!data?.sectors?.length) return [];
     return data.sectors.map(sector => ({
       name: sector.name,
@@ -256,20 +229,48 @@ export default function HeatmapPage({ onNavigate }) {
       )}
 
       {!loading && treemapData.length > 0 && (
-        <Box sx={{ bgcolor: '#0d1117', borderRadius: 1, p: 1 }}>
-          <Typography variant="h5" sx={{ mb: 2, fontWeight: 700 }}>
+        <Box sx={{ bgcolor: '#0d1117', borderRadius: 1, p: 1, position: 'relative' }}>
+          <Typography variant="h5" sx={{ mb: 2, fontWeight: 700, color: '#fff' }}>
             Portfolio Heatmap
           </Typography>
 
-          <ResponsiveContainer width="100%" height={640}>
-            <Treemap
-              data={treemapData}
-              dataKey="size"
-              aspectRatio={4 / 3}
-              content={contentElement}
-              isAnimationActive={false}
-            />
-          </ResponsiveContainer>
+          <Box sx={{ position: 'relative', width: '95%', mx: 'auto' }}>
+            <ResponsiveContainer width="100%" height={608}>
+              <Treemap
+                data={treemapData}
+                dataKey="size"
+                aspectRatio={4 / 3}
+                content={contentElement}
+                isAnimationActive={false}
+              />
+            </ResponsiveContainer>
+            {/* Label overlay — painted after Recharts SVG, always on top */}
+            <svg
+              style={{
+                position: 'absolute', top: 0, left: 0,
+                width: '100%', height: '100%',
+                pointerEvents: 'none',
+              }}
+            >
+              {_labelQueue.map((lbl, i) => lbl.type === 'sector' ? (
+                <g key={i}>
+                  <rect x={lbl.x} y={lbl.y} width={lbl.width} height={24}
+                    fill="rgba(0,0,0,0.65)" />
+                  <text x={lbl.x + 6} y={lbl.y + 16}
+                    fill="#ffffff" fontSize={11} fontWeight={700}
+                    style={{ userSelect: 'none' }}>
+                    {lbl.name.toUpperCase()}
+                  </text>
+                </g>
+              ) : (
+                <text key={i} x={lbl.x + 4} y={lbl.y + 11}
+                  fill="#888888" fontSize={9} fontStyle="italic"
+                  style={{ userSelect: 'none' }}>
+                  {lbl.name}
+                </text>
+              ))}
+            </svg>
+          </Box>
         </Box>
       )}
 
