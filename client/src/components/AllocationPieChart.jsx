@@ -4,7 +4,7 @@ import {
   DialogContent, IconButton, Divider, List, ListItemButton, ListItemText,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Sector } from 'recharts';
 
 const COLORS = [
   '#5c6bc0', '#26c6da', '#66bb6a', '#ffa726', '#ef5350',
@@ -17,6 +17,7 @@ const THRESHOLD = 0.015;
 export default function AllocationPieChart({ positions }) {
   const [selectedSlice, setSelectedSlice] = useState(null);
   const [otherExpanded, setOtherExpanded] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(null);
 
   if (!positions || positions.length === 0) {
     return (
@@ -81,6 +82,47 @@ export default function AllocationPieChart({ positions }) {
     }
   };
 
+  const renderActiveShape = (props) => {
+    const { cx, cy, innerRadius, outerRadius, startAngle, endAngle, fill } = props;
+    return (
+      <g style={{ filter: 'drop-shadow(0 0 6px rgba(0,0,0,0.4))' }}>
+        <Sector
+          cx={cx} cy={cy}
+          innerRadius={innerRadius - 3}
+          outerRadius={outerRadius + 10}
+          startAngle={startAngle} endAngle={endAngle}
+          fill={fill}
+        />
+      </g>
+    );
+  };
+
+  const RADIAN = Math.PI / 180;
+  const renderCustomizedLabel = ({ cx, cy, midAngle, outerRadius, fill, index, name, pct }) => {
+    if (index === activeIndex) return null;
+
+    const sin = Math.sin(-RADIAN * midAngle);
+    const cos = Math.cos(-RADIAN * midAngle);
+    const sx = cx + outerRadius * cos;
+    const sy = cy + outerRadius * sin;
+    const mx = cx + (outerRadius + 20) * cos;
+    const my = cy + (outerRadius + 20) * sin;
+    const ex = mx + (cos >= 0 ? 1 : -1) * 16;
+    const ey = my;
+    const textAnchor = cos >= 0 ? 'start' : 'end';
+    const textX = ex + (cos >= 0 ? 6 : -6);
+
+    return (
+      <g>
+        <path d={`M${sx},${sy}L${mx},${my}L${ex},${ey}`} stroke={fill} strokeWidth={1} fill="none" opacity={0.7} />
+        <circle cx={ex} cy={ey} r={2} fill={fill} />
+        <text x={textX} y={ey} fontSize={10} textAnchor={textAnchor} dominantBaseline="central" fill={fill}>
+          {`${name.length > 14 ? name.slice(0, 14) + '\u2026' : name} ${pct}%`}
+        </text>
+      </g>
+    );
+  };
+
   const formatGbp = (val) =>
     typeof val === 'number'
       ? '£' + val.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -89,14 +131,12 @@ export default function AllocationPieChart({ positions }) {
   // Position detail dialog content
   const renderPositionDetail = (pos) => {
     if (!pos) return null;
-    const quantity = pos.quantity || 0;
-    const avgPrice = pos.average_price_paid || 0;
-    const totalCost = quantity * avgPrice;
     const currentValue = pos.wallet_current_value || 0;
-    const gainLoss = currentValue - totalCost;
-    const gainLossPct = totalCost > 0 ? (gainLoss / totalCost) * 100 : 0;
+    const pl = pos.wallet_unrealized_pl || 0;
+    const totalCost = pos.wallet_total_cost || 0;
+    const gainLossPct = totalCost > 0 ? (pl / totalCost) * 100 : 0;
     const weight = total > 0 ? ((currentValue / total) * 100).toFixed(1) : 0;
-    const glColor = gainLoss >= 0 ? '#4caf50' : '#f44336';
+    const glColor = pl >= 0 ? '#4caf50' : '#f44336';
 
     return (
       <>
@@ -114,17 +154,17 @@ export default function AllocationPieChart({ positions }) {
           </Box>
           <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
             <Typography variant="body2" color="text.secondary">Shares</Typography>
-            <Typography variant="body2">{quantity}</Typography>
+            <Typography variant="body2">{pos.quantity || 0}</Typography>
           </Box>
           <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
             <Typography variant="body2" color="text.secondary">Avg Buy Price</Typography>
-            <Typography variant="body2">{formatGbp(avgPrice)}</Typography>
+            <Typography variant="body2">{formatGbp(pos.average_price_paid || 0)}</Typography>
           </Box>
           <Divider sx={{ my: 0.5 }} />
           <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-            <Typography variant="body2" color="text.secondary">Total Gain/Loss</Typography>
+            <Typography variant="body2" color="text.secondary">Result</Typography>
             <Typography variant="body2" sx={{ color: glColor }}>
-              {formatGbp(gainLoss)} ({gainLossPct >= 0 ? '+' : ''}{gainLossPct.toFixed(1)}%)
+              {formatGbp(pl)} ({gainLossPct >= 0 ? '+' : ''}{gainLossPct.toFixed(1)}%)
             </Typography>
           </Box>
           <Divider sx={{ my: 0.5 }} />
@@ -145,19 +185,23 @@ export default function AllocationPieChart({ positions }) {
     <Card sx={{ height: '100%' }}>
       <CardContent>
         <Typography variant="h6" gutterBottom>Portfolio Allocation</Typography>
-        <ResponsiveContainer width="100%" height={300}>
+        <ResponsiveContainer width="100%" height={380}>
           <PieChart>
             <Pie
               data={data}
               cx="50%"
               cy="50%"
-              outerRadius={110}
-              innerRadius={60}
+              outerRadius={95}
+              innerRadius={52}
               dataKey="value"
-              label={({ name, pct }) => `${name.length > 12 ? name.slice(0, 12) + '...' : name} ${pct}%`}
+              label={renderCustomizedLabel}
               labelLine={false}
-              style={{ fontSize: 10, cursor: 'pointer' }}
+              style={{ cursor: 'pointer' }}
               onClick={handleSliceClick}
+              activeIndex={activeIndex}
+              activeShape={renderActiveShape}
+              onMouseEnter={(_, index) => setActiveIndex(index)}
+              onMouseLeave={() => setActiveIndex(null)}
             >
               {data.map((_, i) => (
                 <Cell key={i} fill={COLORS[i % COLORS.length]} />
