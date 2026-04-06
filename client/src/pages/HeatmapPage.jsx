@@ -262,31 +262,56 @@ export default function HeatmapPage({ onNavigate }) {
               height={chartDims.height || 608}
               viewBox={chartDims.width ? `0 0 ${chartDims.width} ${chartDims.height}` : undefined}
             >
-              {overlayLabels.map((lbl, i) => lbl.type === 'sector' && lbl.width > 50 ? (
-                <g key={`s-${i}`}>
-                  <defs>
-                    <clipPath id={`sector-clip-${i}`}>
-                      <rect x={lbl.x} y={lbl.y} width={lbl.width} height={22} />
-                    </clipPath>
-                  </defs>
-                  <rect x={lbl.x} y={lbl.y} width={lbl.width} height={22}
-                    fill="rgba(0,0,0,0.75)" />
-                  <text x={lbl.x + 6} y={lbl.y + 15}
-                    fill="#ffffff" fontSize={11} fontWeight={700}
-                    dominantBaseline="auto"
-                    clipPath={`url(#sector-clip-${i})`}
-                    style={{ userSelect: 'none' }}>
-                    {lbl.name.toUpperCase()}
-                  </text>
-                </g>
-              ) : lbl.type === 'industry' && lbl.width > 80 && lbl.height > 30 ? (
-                <text key={`i-${i}`} x={lbl.x + 4} y={lbl.y + 11}
-                  fill="#888888" fontSize={9} fontStyle="italic"
-                  dominantBaseline="auto"
-                  style={{ userSelect: 'none' }}>
-                  {lbl.name}
-                </text>
-              ) : null)}
+              {overlayLabels.map((lbl, i) => {
+                if (lbl.type === 'sector' && lbl.width > 50) {
+                  return (
+                    <g key={`s-${i}`}>
+                      <defs>
+                        <clipPath id={`sector-clip-${i}`}>
+                          <rect x={lbl.x} y={lbl.y} width={lbl.width} height={22} />
+                        </clipPath>
+                      </defs>
+                      <rect x={lbl.x} y={lbl.y} width={lbl.width} height={22}
+                        fill="rgba(0,0,0,0.75)" />
+                      <text x={lbl.x + 6} y={lbl.y + 15}
+                        fill="#ffffff" fontSize={11} fontWeight={700}
+                        dominantBaseline="auto"
+                        clipPath={`url(#sector-clip-${i})`}
+                        style={{ userSelect: 'none' }}>
+                        {lbl.name.toUpperCase()}
+                      </text>
+                    </g>
+                  );
+                }
+
+                if (lbl.type === 'industry' && lbl.width > 80 && lbl.height > 50) {
+                  return (
+                    <g key={`i-${i}`}>
+                      <defs>
+                        <clipPath id={`ind-clip-${i}`}>
+                          <rect x={lbl.x} y={lbl.y + 22}
+                                width={lbl.width}
+                                height={Math.max(0, lbl.height - 22)} />
+                        </clipPath>
+                      </defs>
+                      <text
+                        x={lbl.x + 4}
+                        y={lbl.y + 33}
+                        fill="#aaaaaa"
+                        fontSize={9}
+                        fontStyle="italic"
+                        dominantBaseline="auto"
+                        clipPath={`url(#ind-clip-${i})`}
+                        style={{ userSelect: 'none' }}
+                      >
+                        {lbl.name}
+                      </text>
+                    </g>
+                  );
+                }
+
+                return null;
+              })}
             </svg>
           </Box>
         </Box>
