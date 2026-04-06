@@ -142,7 +142,7 @@ router.get('/', async (req, res) => {
           ticker: pos.ticker,
           name: pos.instrument_name || pos.ticker,
           sector: 'Other',
-          industry: 'Unknown',
+          industry: 'Other',
           currentPrice: pos.current_price || 0,
           pctChange: 0,
           marketValue: pos.wallet_current_value,
@@ -151,17 +151,36 @@ router.get('/', async (req, res) => {
       }
     }));
 
-    // 4. Group by sector, sorted by total value descending
+    // 4. Group by sector → industry, sorted by total value descending
     const sectorMap = {};
     for (const stock of enriched) {
+      const industryName = stock.industry === 'Unknown' ? stock.sector : stock.industry;
+
       if (!sectorMap[stock.sector]) {
-        sectorMap[stock.sector] = { name: stock.sector, totalValue: 0, stocks: [] };
+        sectorMap[stock.sector] = { name: stock.sector, totalValue: 0, industries: {} };
       }
-      sectorMap[stock.sector].totalValue += stock.marketValue;
-      sectorMap[stock.sector].stocks.push(stock);
+      const sector = sectorMap[stock.sector];
+      sector.totalValue += stock.marketValue;
+
+      if (!sector.industries[industryName]) {
+        sector.industries[industryName] = { name: industryName, totalValue: 0, stocks: [] };
+      }
+      sector.industries[industryName].totalValue += stock.marketValue;
+      sector.industries[industryName].stocks.push(stock);
     }
+
     const sectors = Object.values(sectorMap)
-      .sort((a, b) => b.totalValue - a.totalValue);
+      .sort((a, b) => b.totalValue - a.totalValue)
+      .map(sector => ({
+        name: sector.name,
+        totalValue: sector.totalValue,
+        industries: Object.values(sector.industries)
+          .sort((a, b) => b.totalValue - a.totalValue)
+          .map(ind => ({
+            ...ind,
+            stocks: ind.stocks.sort((a, b) => b.marketValue - a.marketValue),
+          })),
+      }));
 
     const result = { stale: false, sectors };
     cache.set('heatmap', result, 100_000); // 100-second TTL

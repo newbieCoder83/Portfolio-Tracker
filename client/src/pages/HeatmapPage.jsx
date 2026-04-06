@@ -22,27 +22,67 @@ function getPctColor(pct, failed) {
 }
 
 // Custom SVG renderer for each treemap tile.
-// depth 0 = sector group header, depth 1 = individual stock tile.
+// Recharts adds an invisible root at depth 0.
+// depth 1 = sector, depth 2 = industry, depth 3 = stock tile.
 function CustomContent(props) {
   const {
     x, y, width, height, depth, name,
     ticker, pctChange, failed, onTileMouseEnter, onTileMouseLeave,
   } = props;
 
+  // depth 0: invisible Recharts root
   if (depth === 0) {
-    // Sector header — transparent fill, label only
+    return <g />;
+  }
+
+  // depth 1: Sector header block
+  if (depth === 1) {
+    const HEADER_H = 24;
     return (
       <g>
         <rect
           x={x} y={y} width={width} height={height}
-          fill="transparent"
-          stroke="rgba(255,255,255,0.08)"
+          fill="rgba(255,255,255,0.03)"
+          stroke="#ffffff"
+          strokeWidth={2}
+        />
+        {width > 50 && height > HEADER_H && (
+          <g>
+            <rect
+              x={x} y={y} width={width} height={HEADER_H}
+              fill="rgba(0,0,0,0.6)"
+            />
+            <text
+              x={x + 6} y={y + 16}
+              fill="#ffffff"
+              fontSize={11}
+              fontWeight={700}
+              style={{ pointerEvents: 'none', userSelect: 'none' }}
+            >
+              {name.toUpperCase()}
+            </text>
+          </g>
+        )}
+      </g>
+    );
+  }
+
+  // depth 2: Industry sub-block
+  if (depth === 2) {
+    return (
+      <g>
+        <rect
+          x={x} y={y} width={width} height={height}
+          fill="none"
+          stroke="rgba(255,255,255,0.12)"
           strokeWidth={1}
         />
-        {width > 60 && (
+        {width > 80 && height > 30 && (
           <text
-            x={x + 6} y={y + 16}
-            fill="#9e9e9e" fontSize={11} fontWeight={600}
+            x={x + 4} y={y + 11}
+            fill="#888888"
+            fontSize={9}
+            fontStyle="italic"
             style={{ pointerEvents: 'none', userSelect: 'none' }}
           >
             {name}
@@ -52,8 +92,8 @@ function CustomContent(props) {
     );
   }
 
-  // Stock tile
-  const bgColor = props.fill || getPctColor(pctChange, failed);
+  // depth 3: Stock tile
+  const bgColor = getPctColor(pctChange, failed);
   const sign = (pctChange >= 0) ? '+' : '';
   const cleanTicker = (ticker || name)
     .replace(/_US_EQ$/, '')
@@ -61,26 +101,29 @@ function CustomContent(props) {
     .replace(/l$/, '');
   const label = (name && name !== ticker) ? name : cleanTicker;
 
+  const showText = width >= 40 && height >= 28;
+  const displayLabel = width > 80 ? label : (width >= 40 ? cleanTicker : null);
+  const clipId = `clip-${depth}-${x}-${y}`;
+
   return (
     <g
       onMouseEnter={(e) => onTileMouseEnter && onTileMouseEnter(e, props)}
       onMouseLeave={() => onTileMouseLeave && onTileMouseLeave()}
     >
       <defs>
-        <clipPath id={`clip-${x}-${y}`}>
-          <rect x={x + 2} y={y + 2} width={width - 4} height={height - 4} />
+        <clipPath id={clipId}>
+          <rect x={x + 2} y={y + 2} width={Math.max(0, width - 4)} height={Math.max(0, height - 4)} />
         </clipPath>
       </defs>
       <rect
         x={x} y={y} width={width} height={height}
         fill={bgColor}
-        stroke="rgba(0,0,0,0.3)"
-        strokeWidth={1}
-        rx={2}
+        stroke="#0d1117"
+        strokeWidth={2}
         style={{ cursor: 'default' }}
       />
-      <g clipPath={`url(#clip-${x}-${y})`}>
-        {width > 40 && height > 28 && (
+      <g clipPath={`url(#${clipId})`}>
+        {showText && displayLabel && (
           <text
             x={x + width / 2}
             y={y + height / 2 - (height > 52 ? 10 : 0)}
@@ -89,11 +132,11 @@ function CustomContent(props) {
             fontSize={Math.min(14, Math.floor(width / 5))}
             fontWeight={700}
             dominantBaseline="middle"
-            textLength={label.length * 8 > width - 16 ? Math.max(0, width - 16) : undefined}
+            textLength={displayLabel.length * 8 > width - 16 ? Math.max(0, width - 16) : undefined}
             lengthAdjust="spacingAndGlyphs"
             style={{ pointerEvents: 'none', userSelect: 'none' }}
           >
-            {label}
+            {displayLabel}
           </text>
         )}
         {width > 60 && height > 52 && (
@@ -146,7 +189,10 @@ export default function HeatmapPage({ onNavigate }) {
 
   // Total portfolio value — used to compute per-stock weights
   const totalValue = useMemo(
-    () => (data?.sectors ?? []).flatMap(s => s.stocks).reduce((sum, s) => sum + s.marketValue, 0),
+    () => (data?.sectors ?? [])
+      .flatMap(s => s.industries ?? [])
+      .flatMap(i => i.stocks ?? [])
+      .reduce((sum, s) => sum + s.marketValue, 0),
     [data]
   );
 
@@ -155,12 +201,15 @@ export default function HeatmapPage({ onNavigate }) {
     if (!data?.sectors?.length) return [];
     return data.sectors.map(sector => ({
       name: sector.name,
-      children: sector.stocks.map(stock => ({
-        name: stock.ticker,
-        size: stock.marketValue,
-        fill: getPctColor(stock.pctChange, stock.failed),
-        ...stock,
-        weight: totalValue > 0 ? (stock.marketValue / totalValue) * 100 : 0,
+      children: sector.industries.map(industry => ({
+        name: industry.name,
+        children: industry.stocks.map(stock => ({
+          name: stock.ticker,
+          size: stock.marketValue,
+          fill: getPctColor(stock.pctChange, stock.failed),
+          ...stock,
+          weight: totalValue > 0 ? (stock.marketValue / totalValue) * 100 : 0,
+        })),
       })),
     }));
   }, [data, totalValue]);
@@ -207,7 +256,7 @@ export default function HeatmapPage({ onNavigate }) {
       )}
 
       {!loading && treemapData.length > 0 && (
-        <Box>
+        <Box sx={{ bgcolor: '#0d1117', borderRadius: 1, p: 1 }}>
           <Typography variant="h5" sx={{ mb: 2, fontWeight: 700 }}>
             Portfolio Heatmap
           </Typography>
@@ -231,7 +280,7 @@ export default function HeatmapPage({ onNavigate }) {
         const changeGbp = s.currentPrice && s.pctChange != null
           ? (s.currentPrice * s.pctChange / 100).toFixed(2)
           : null;
-        const tooltipX = Math.min(tooltip.x + 12, window.innerWidth - 240);
+        const tooltipX = Math.min(tooltip.x + 12, window.innerWidth - 260);
         const tooltipY = tooltip.y - 10;
         return (
           <Box
@@ -246,14 +295,14 @@ export default function HeatmapPage({ onNavigate }) {
               zIndex: 9999,
               pointerEvents: 'none',
               minWidth: 200,
-              maxWidth: 240,
+              maxWidth: 260,
             }}
           >
             <Typography variant="body2" fontWeight={700} sx={{ mb: 0.25 }}>
               {s.name}
             </Typography>
             <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.75 }}>
-              {s.sector}{s.industry && s.industry !== 'Unknown' ? ` / ${s.industry}` : ''}
+              {s.sector}{s.industry ? ` / ${s.industry}` : ''}
             </Typography>
             <Typography variant="body2">
               Price: £{typeof s.currentPrice === 'number' ? s.currentPrice.toFixed(2) : '—'}
@@ -266,10 +315,10 @@ export default function HeatmapPage({ onNavigate }) {
               {changeGbp !== null ? ` (£${changeGbp})` : ''}
             </Typography>
             <Typography variant="body2">
-              Value: £{typeof s.marketValue === 'number' ? s.marketValue.toFixed(2) : '—'}
+              Portfolio Value: £{typeof s.marketValue === 'number' ? s.marketValue.toFixed(2) : '—'}
             </Typography>
             <Typography variant="body2">
-              Weight: {typeof s.weight === 'number' ? s.weight.toFixed(1) : '—'}%
+              Portfolio Weight: {typeof s.weight === 'number' ? s.weight.toFixed(1) : '—'}%
             </Typography>
             {s.failed && (
               <Typography variant="caption" sx={{ color: '#ffa726', display: 'block', mt: 0.5 }}>
