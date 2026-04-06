@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
 import { Box, Typography, CircularProgress, Alert } from '@mui/material';
 import { Treemap, ResponsiveContainer } from 'recharts';
 import Layout from '../components/Layout';
@@ -142,7 +142,8 @@ export default function HeatmapPage({ onNavigate }) {
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
   const [tooltip, setTooltip] = useState(null); // { x, y, stock }
-  const pendingLabelsRef = useRef([]);
+  const labelCollectorRef = useRef([]);
+  const labelCollectorFnRef = useRef((lbl) => { labelCollectorRef.current.push(lbl); });
   const [overlayLabels, setOverlayLabels] = useState([]);
   const [chartDims, setChartDims] = useState({ width: 0, height: 0 });
 
@@ -172,7 +173,7 @@ export default function HeatmapPage({ onNavigate }) {
 
   // Build nested Recharts Treemap data: [{ name: sector, children: [...stocks] }]
   const treemapData = useMemo(() => {
-    pendingLabelsRef.current = [];
+    labelCollectorRef.current = [];
     if (!data?.sectors?.length) return [];
     return data.sectors.map(sector => ({
       name: sector.name,
@@ -197,26 +198,22 @@ export default function HeatmapPage({ onNavigate }) {
     setTooltip(null);
   }, []);
 
-  const handleLabelCollect = useCallback((lbl) => {
-    pendingLabelsRef.current.push(lbl);
-  }, []);
-
   const handleChartResize = useCallback((w, h) => setChartDims({ width: w, height: h }), []);
 
-  useEffect(() => {
-    setOverlayLabels([...pendingLabelsRef.current]);
-    pendingLabelsRef.current = [];
+  useLayoutEffect(() => {
+    setOverlayLabels([...labelCollectorRef.current]);
   }, [treemapData]);
 
   // Pass event handlers into CustomContent via the content prop.
   // Recharts spreads all data fields onto the content component as props.
-  const contentElement = (
+  // Memoised so Recharts doesn't re-render the entire treemap on unrelated state changes.
+  const contentElement = useMemo(() => (
     <CustomContent
       onTileMouseEnter={handleTileMouseEnter}
       onTileMouseLeave={handleTileMouseLeave}
-      onLabelCollect={handleLabelCollect}
+      onLabelCollect={labelCollectorFnRef.current}
     />
-  );
+  ), [handleTileMouseEnter, handleTileMouseLeave]);
 
   return (
     <Layout onSyncComplete={fetchData} currentPage="heatmap" onNavigate={onNavigate}>
