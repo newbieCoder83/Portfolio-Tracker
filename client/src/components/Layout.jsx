@@ -4,11 +4,15 @@ import {
 } from '@mui/material';
 import SyncIcon from '@mui/icons-material/Sync';
 import LogoutIcon from '@mui/icons-material/Logout';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 
-export default function Layout({ children, onSyncComplete, currentPage = 'dashboard', onNavigate = () => {} }) {
+export default function Layout({ children, onSyncComplete }) {
   const { logout, lastSync, setLastSync, environment } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const currentPage = location.pathname.slice(1) || 'dashboard';
   const [syncing, setSyncing] = useState(false);
 
   const handleSync = async () => {
@@ -74,7 +78,7 @@ export default function Layout({ children, onSyncComplete, currentPage = 'dashbo
         >
           <Tabs
             value={currentPage}
-            onChange={(_, val) => onNavigate(val)}
+            onChange={(_, val) => navigate(`/${val}`)}
             textColor="inherit"
             TabIndicatorProps={{ style: { backgroundColor: '#5c6bc0' } }}
             sx={{ '& .MuiTab-root': { minHeight: 36, fontSize: '0.8rem', textTransform: 'none', minWidth: 100 } }}

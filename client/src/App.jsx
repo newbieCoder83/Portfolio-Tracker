@@ -1,13 +1,12 @@
-import React, { useState } from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Box, CircularProgress } from '@mui/material';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import HeatmapPage from './pages/HeatmapPage';
 
-function AppContent() {
+function ProtectedRoute({ children }) {
   const { isAuthenticated, loading } = useAuth();
-  const [currentPage, setCurrentPage] = useState('dashboard');
 
   if (loading) {
     return (
@@ -17,9 +16,33 @@ function AppContent() {
     );
   }
 
-  if (!isAuthenticated) return <LoginPage />;
-  if (currentPage === 'heatmap') return <HeatmapPage onNavigate={setCurrentPage} />;
-  return <DashboardPage onNavigate={setCurrentPage} />;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  return children;
+}
+
+function AppContent() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/dashboard"
+        element={
+          <ProtectedRoute>
+            <DashboardPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/heatmap"
+        element={
+          <ProtectedRoute>
+            <HeatmapPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+    </Routes>
+  );
 }
 
 export default function App() {

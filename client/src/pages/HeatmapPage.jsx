@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
 import { Box, Typography, CircularProgress, Alert } from '@mui/material';
-import { Treemap, ResponsiveContainer } from 'recharts';
+import { Treemap } from 'recharts';
 import Layout from '../components/Layout';
 import api from '../api/client';
 
@@ -28,6 +28,8 @@ function CustomContent(props) {
   const {
     x, y, width, height, depth, name,
     ticker, pctChange, failed, onTileMouseEnter, onTileMouseLeave, onLabelCollect,
+    onSectorMouseEnter, onSectorMouseLeave,
+    sectorValue, sectorWeight,
   } = props;
 
   // depth 0: invisible Recharts root
@@ -42,7 +44,11 @@ function CustomContent(props) {
       onLabelCollect?.({ type: 'sector', x, y, width, height, name });
     }
     return (
-      <g>
+      <g
+        onMouseEnter={(e) => onSectorMouseEnter?.(e, { name, sectorValue, sectorWeight })}
+        onMouseLeave={() => onSectorMouseLeave?.()}
+        style={{ cursor: 'crosshair' }}
+      >
         <rect x={x} y={y} width={width} height={height}
           fill="rgba(255,255,255,0.03)" stroke="#ffffff" strokeWidth={2} />
       </g>
@@ -58,7 +64,7 @@ function CustomContent(props) {
     return (
       <g>
         <rect x={x} y={y} width={width} height={height}
-          fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth={1} />
+          fill="none" stroke="rgba(255,255,255,0.55)" strokeWidth={1.5} />
       </g>
     );
   }
@@ -137,15 +143,17 @@ function CustomContent(props) {
   );
 }
 
-export default function HeatmapPage({ onNavigate }) {
+export default function HeatmapPage() {
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
   const [tooltip, setTooltip] = useState(null); // { x, y, stock }
+  const [sectorTooltip, setSectorTooltip] = useState(null); // { x, y, name, sectorValue, sectorWeight }
   const labelCollectorRef = useRef([]);
   const labelCollectorFnRef = useRef((lbl) => { labelCollectorRef.current.push(lbl); });
   const [overlayLabels, setOverlayLabels] = useState([]);
-  const [chartDims, setChartDims] = useState({ width: 0, height: 0 });
+  const HEATMAP_WIDTH = 1200;
+  const HEATMAP_HEIGHT = 608;
 
   const fetchData = useCallback(async () => {
     try {
@@ -175,8 +183,20 @@ export default function HeatmapPage({ onNavigate }) {
   const treemapData = useMemo(() => {
     labelCollectorRef.current = [];
     if (!data?.sectors?.length) return [];
+    const sectorStats = {};
+    data.sectors.forEach(sector => {
+      const sectorValue = sector.industries
+        .flatMap(i => i.stocks)
+        .reduce((sum, s) => sum + s.marketValue, 0);
+      const sectorWeight = totalValue > 0
+        ? (sectorValue / totalValue) * 100
+        : 0;
+      sectorStats[sector.name] = { sectorValue, sectorWeight };
+    });
     return data.sectors.map(sector => ({
       name: sector.name,
+      sectorValue: sectorStats[sector.name].sectorValue,
+      sectorWeight: sectorStats[sector.name].sectorWeight,
       children: sector.industries.map(industry => ({
         name: industry.name,
         children: industry.stocks.map(stock => ({
@@ -198,7 +218,17 @@ export default function HeatmapPage({ onNavigate }) {
     setTooltip(null);
   }, []);
 
-  const handleChartResize = useCallback((w, h) => setChartDims({ width: w, height: h }), []);
+  const handleSectorMouseEnter = useCallback((e, sectorInfo) => {
+    setSectorTooltip({
+      x: e.clientX,
+      y: e.clientY,
+      ...sectorInfo,
+    });
+  }, []);
+
+  const handleSectorMouseLeave = useCallback(() => {
+    setSectorTooltip(null);
+  }, []);
 
   useLayoutEffect(() => {
     setOverlayLabels([...labelCollectorRef.current]);
@@ -212,11 +242,14 @@ export default function HeatmapPage({ onNavigate }) {
       onTileMouseEnter={handleTileMouseEnter}
       onTileMouseLeave={handleTileMouseLeave}
       onLabelCollect={labelCollectorFnRef.current}
+      onSectorMouseEnter={handleSectorMouseEnter}
+      onSectorMouseLeave={handleSectorMouseLeave}
     />
-  ), [handleTileMouseEnter, handleTileMouseLeave]);
+  ), [handleTileMouseEnter, handleTileMouseLeave,
+      handleSectorMouseEnter, handleSectorMouseLeave]);
 
   return (
-    <Layout onSyncComplete={fetchData} currentPage="heatmap" onNavigate={onNavigate}>
+    <Layout onSyncComplete={fetchData} >
       {data?.stale && (
         <Alert severity="warning" sx={{ mb: 2 }}>
           Showing cached data — live prices are temporarily unavailable.
@@ -245,23 +278,24 @@ export default function HeatmapPage({ onNavigate }) {
             Portfolio Heatmap
           </Typography>
 
-          <Box sx={{ position: 'relative', width: '95%', mx: 'auto' }}>
-            <ResponsiveContainer width="100%" height={608} onResize={handleChartResize}>
+          <Box sx={{ overflowX: 'auto', width: '100%' }}>
+            <Box sx={{ position: 'relative', width: HEATMAP_WIDTH, mx: 'auto' }}>
               <Treemap
+                width={HEATMAP_WIDTH}
+                height={HEATMAP_HEIGHT}
                 data={treemapData}
                 dataKey="size"
                 aspectRatio={4 / 3}
                 content={contentElement}
                 isAnimationActive={false}
               />
-            </ResponsiveContainer>
-            {/* Label overlay — painted after Recharts SVG, always on top */}
-            <svg
-              style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
-              width={chartDims.width || '100%'}
-              height={chartDims.height || 608}
-              viewBox={chartDims.width ? `0 0 ${chartDims.width} ${chartDims.height}` : undefined}
-            >
+              {/* Label overlay — painted after Recharts SVG, always on top */}
+              <svg
+                style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
+                width={HEATMAP_WIDTH}
+                height={HEATMAP_HEIGHT}
+                viewBox={`0 0 ${HEATMAP_WIDTH} ${HEATMAP_HEIGHT}`}
+              >
               {overlayLabels.map((lbl, i) => {
                 if (lbl.type === 'sector' && lbl.width > 50) {
                   return (
@@ -312,7 +346,8 @@ export default function HeatmapPage({ onNavigate }) {
 
                 return null;
               })}
-            </svg>
+              </svg>
+            </Box>
           </Box>
         </Box>
       )}
@@ -372,6 +407,37 @@ export default function HeatmapPage({ onNavigate }) {
           </Box>
         );
       })()}
+
+      {sectorTooltip && (
+        <Box
+          sx={{
+            position: 'fixed',
+            left: Math.min(sectorTooltip.x + 12, window.innerWidth - 240),
+            top: sectorTooltip.y - 10,
+            bgcolor: '#1a1a2e',
+            border: '1px solid rgba(255,255,255,0.2)',
+            borderRadius: 1,
+            p: 1.5,
+            zIndex: 9998,
+            pointerEvents: 'none',
+            minWidth: 200,
+          }}
+        >
+          <Typography variant="body2" fontWeight={700} sx={{ color: '#fff', mb: 0.5 }}>
+            {sectorTooltip.name}
+          </Typography>
+          <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.7)' }}>
+            Portfolio Value: £{typeof sectorTooltip.sectorValue === 'number'
+              ? sectorTooltip.sectorValue.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+              : '—'}
+          </Typography>
+          <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.7)' }}>
+            Portfolio Weight: {typeof sectorTooltip.sectorWeight === 'number'
+              ? sectorTooltip.sectorWeight.toFixed(1)
+              : '—'}%
+          </Typography>
+        </Box>
+      )}
     </Layout>
   );
 }
