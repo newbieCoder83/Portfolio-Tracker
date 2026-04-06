@@ -68,10 +68,10 @@ export default function DashboardPage({ onNavigate }) {
 
       {/* Row 1: Allocation pie + Portfolio value chart */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} md={4}>
+        <Grid item xs={12} md={5}>
           <AllocationPieChart positions={data.positions} />
         </Grid>
-        <Grid item xs={12} md={8}>
+        <Grid item xs={12} md={7}>
           <PortfolioValueChart snapshots={data.snapshots} />
         </Grid>
       </Grid>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Card, CardContent, Typography, Box, Dialog, DialogTitle,
   DialogContent, IconButton, Divider, List, ListItemButton, ListItemText,
@@ -18,6 +18,20 @@ export default function AllocationPieChart({ positions }) {
   const [selectedSlice, setSelectedSlice] = useState(null);
   const [otherExpanded, setOtherExpanded] = useState(false);
   const [activeIndex, setActiveIndex] = useState(null);
+  const containerRef = useRef(null);
+  const [chartSize, setChartSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        setChartSize({ width, height });
+      }
+    });
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
 
   if (!positions || positions.length === 0) {
     return (
@@ -82,6 +96,10 @@ export default function AllocationPieChart({ positions }) {
     }
   };
 
+  const baseRadius = Math.min(chartSize.width * 0.32 * 1.05, 120);
+  const outerR = Math.max(baseRadius, 70);
+  const innerR = Math.round(outerR * 0.54);
+
   const renderActiveShape = (props) => {
     const { cx, cy, innerRadius, outerRadius, startAngle, endAngle, fill } = props;
     return (
@@ -98,29 +116,88 @@ export default function AllocationPieChart({ positions }) {
   };
 
   const RADIAN = Math.PI / 180;
-  const renderCustomizedLabel = ({ cx, cy, midAngle, outerRadius, fill, index, name, pct }) => {
-    if (index === activeIndex) return null;
+  const SMALL_THRESHOLD = 0.03;
+  const MIN_LABEL_GAP = 13;
 
-    const sin = Math.sin(-RADIAN * midAngle);
-    const cos = Math.cos(-RADIAN * midAngle);
-    const sx = cx + outerRadius * cos;
-    const sy = cy + outerRadius * sin;
-    const mx = cx + (outerRadius + 20) * cos;
-    const my = cy + (outerRadius + 20) * sin;
-    const ex = mx + (cos >= 0 ? 1 : -1) * 16;
-    const ey = my;
-    const textAnchor = cos >= 0 ? 'start' : 'end';
-    const textX = ex + (cos >= 0 ? 6 : -6);
+  const buildLabelPositions = () => {
+    return data.map((entry, index) => {
+      if (index === activeIndex) return null;
 
-    return (
-      <g>
-        <path d={`M${sx},${sy}L${mx},${my}L${ex},${ey}`} stroke={fill} strokeWidth={1} fill="none" opacity={0.7} />
-        <circle cx={ex} cy={ey} r={2} fill={fill} />
-        <text x={textX} y={ey} fontSize={10} textAnchor={textAnchor} dominantBaseline="central" fill={fill}>
-          {`${name.length > 14 ? name.slice(0, 14) + '\u2026' : name} ${pct}%`}
-        </text>
-      </g>
-    );
+      const total_ = data.reduce((s, d) => s + d.value, 0);
+      let cumulative = 0;
+      for (let i = 0; i < index; i++) cumulative += data[i].value;
+      const midAngle = 360 - (cumulative + entry.value / 2) / total_ * 360;
+
+      const isSmall = total > 0 && entry.value / total < SMALL_THRESHOLD;
+      const radialOffset = isSmall ? 44 : 22;
+
+      const cos = Math.cos(-RADIAN * midAngle);
+      const sin = Math.sin(-RADIAN * midAngle);
+      const cx_ = chartSize.width > 0 ? chartSize.width / 2 - 15 : 200;
+      const cy_ = 210;
+
+      const sx = cx_ + outerR * cos;
+      const sy = cy_ + outerR * sin;
+      const mx = cx_ + (outerR + radialOffset) * cos;
+      const my = cy_ + (outerR + radialOffset) * sin;
+      const isRight = cos >= 0;
+      const ex = mx + (isRight ? 1 : -1) * 16;
+
+      return { index, midAngle, cos, sin, sx, sy, mx, my, ex, ey: my, isRight, entry, isSmall };
+    });
+  };
+
+  const resolveCollisions = (positions) => {
+    const valid = positions.filter(Boolean);
+
+    ['right', 'left'].forEach((side) => {
+      const bucket = valid
+        .filter((p) => (side === 'right' ? p.isRight : !p.isRight))
+        .sort((a, b) => a.ey - b.ey);
+
+      for (let i = 1; i < bucket.length; i++) {
+        const prev = bucket[i - 1];
+        const curr = bucket[i];
+        const gap = curr.ey - prev.ey;
+        if (gap < MIN_LABEL_GAP) {
+          curr.ey += MIN_LABEL_GAP - gap;
+          curr.ex = curr.mx + (curr.isRight ? 1 : -1) * 16;
+        }
+      }
+    });
+
+    return valid;
+  };
+
+  const renderLabels = () => {
+    const raw = buildLabelPositions();
+    const resolved = resolveCollisions(raw);
+
+    return resolved.map(({ index, sx, sy, mx, my, ex, ey, isRight, entry }) => {
+      const fill = COLORS[index % COLORS.length];
+      const textAnchor = isRight ? 'start' : 'end';
+      const textX = ex + (isRight ? 6 : -6);
+      const displayName = entry.name.length > 14 ? entry.name.slice(0, 14) + '…' : entry.name;
+
+      return (
+        <g key={index}>
+          <path
+            d={`M${sx},${sy}L${mx},${my}L${ex},${ey}`}
+            stroke={fill} strokeWidth={1} fill="none" opacity={0.7}
+          />
+          <circle cx={ex} cy={ey} r={2} fill={fill} />
+          <text
+            x={textX} y={ey}
+            fontSize={10}
+            textAnchor={textAnchor}
+            dominantBaseline="central"
+            fill={fill}
+          >
+            {`${displayName} ${entry.pct}%`}
+          </text>
+        </g>
+      );
+    });
   };
 
   const formatGbp = (val) =>
@@ -182,31 +259,32 @@ export default function AllocationPieChart({ positions }) {
   };
 
   return (
-    <Card sx={{ height: '100%' }}>
+    <Card ref={containerRef} sx={{ height: '100%' }}>
       <CardContent>
         <Typography variant="h6" gutterBottom>Portfolio Allocation</Typography>
-        <ResponsiveContainer width="100%" height={380}>
+        <ResponsiveContainer width="100%" height={420}>
           <PieChart>
             <Pie
               data={data}
-              cx="50%"
+              cx={chartSize.width > 0 ? chartSize.width / 2 - 15 : '50%'}
               cy="50%"
-              outerRadius={95}
-              innerRadius={52}
+              outerRadius={outerR}
+              innerRadius={innerR}
               dataKey="value"
-              label={renderCustomizedLabel}
               labelLine={false}
               style={{ cursor: 'pointer' }}
-              onClick={handleSliceClick}
               activeIndex={activeIndex}
               activeShape={renderActiveShape}
               onMouseEnter={(_, index) => setActiveIndex(index)}
               onMouseLeave={() => setActiveIndex(null)}
+              onClick={handleSliceClick}
             >
               {data.map((_, i) => (
                 <Cell key={i} fill={COLORS[i % COLORS.length]} />
               ))}
             </Pie>
+            {/* Collision-resolved label layer rendered as PieChart sibling */}
+            <g>{chartSize.width > 0 && renderLabels()}</g>
             <Tooltip content={<CustomTooltip />} />
           </PieChart>
         </ResponsiveContainer>
