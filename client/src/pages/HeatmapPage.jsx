@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Box, Typography, CircularProgress, Alert } from '@mui/material';
 import { Treemap, ResponsiveContainer } from 'recharts';
 import Layout from '../components/Layout';
@@ -21,16 +21,13 @@ function getPctColor(pct, failed) {
   return `rgb(${r},${g},${b})`;
 }
 
-// Label queue — filled during Recharts render pass, drawn in overlay SVG
-let _labelQueue = [];
-
 // Custom SVG renderer for each treemap tile.
 // Recharts adds an invisible root at depth 0.
 // depth 1 = sector, depth 2 = industry, depth 3 = stock tile.
 function CustomContent(props) {
   const {
     x, y, width, height, depth, name,
-    ticker, pctChange, failed, onTileMouseEnter, onTileMouseLeave,
+    ticker, pctChange, failed, onTileMouseEnter, onTileMouseLeave, onLabelCollect,
   } = props;
 
   // depth 0: invisible Recharts root
@@ -38,10 +35,11 @@ function CustomContent(props) {
     return <g />;
   }
 
-  // depth 1: Sector block — render rect only, queue label for overlay
+  // depth 1: Sector block — render rect only, collect label for overlay
   if (depth === 1) {
-    if (width > 50 && height > 24) {
-      _labelQueue.push({ type: 'sector', x, y, width, name });
+    if (width <= 1 || height <= 1) return <g />;
+    if (width >= 80 && height >= 40) {
+      onLabelCollect?.({ type: 'sector', x, y, width, height, name });
     }
     return (
       <g>
@@ -51,10 +49,11 @@ function CustomContent(props) {
     );
   }
 
-  // depth 2: Industry sub-block — render rect only, queue label for overlay
+  // depth 2: Industry sub-block — render rect only, collect label for overlay
   if (depth === 2) {
-    if (width > 80 && height > 30) {
-      _labelQueue.push({ type: 'industry', x, y, width, name });
+    if (width <= 1 || height <= 1) return <g />;
+    if (width >= 100 && height >= 40) {
+      onLabelCollect?.({ type: 'industry', x, y, width, height, name });
     }
     return (
       <g>
@@ -143,6 +142,9 @@ export default function HeatmapPage({ onNavigate }) {
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
   const [tooltip, setTooltip] = useState(null); // { x, y, stock }
+  const pendingLabelsRef = useRef([]);
+  const [overlayLabels, setOverlayLabels] = useState([]);
+  const [chartDims, setChartDims] = useState({ width: 0, height: 0 });
 
   const fetchData = useCallback(async () => {
     try {
@@ -170,7 +172,7 @@ export default function HeatmapPage({ onNavigate }) {
 
   // Build nested Recharts Treemap data: [{ name: sector, children: [...stocks] }]
   const treemapData = useMemo(() => {
-    _labelQueue = [];
+    pendingLabelsRef.current = [];
     if (!data?.sectors?.length) return [];
     return data.sectors.map(sector => ({
       name: sector.name,
@@ -195,12 +197,24 @@ export default function HeatmapPage({ onNavigate }) {
     setTooltip(null);
   }, []);
 
+  const handleLabelCollect = useCallback((lbl) => {
+    pendingLabelsRef.current.push(lbl);
+  }, []);
+
+  const handleChartResize = useCallback((w, h) => setChartDims({ width: w, height: h }), []);
+
+  useEffect(() => {
+    setOverlayLabels([...pendingLabelsRef.current]);
+    pendingLabelsRef.current = [];
+  }, [treemapData]);
+
   // Pass event handlers into CustomContent via the content prop.
   // Recharts spreads all data fields onto the content component as props.
   const contentElement = (
     <CustomContent
       onTileMouseEnter={handleTileMouseEnter}
       onTileMouseLeave={handleTileMouseLeave}
+      onLabelCollect={handleLabelCollect}
     />
   );
 
@@ -235,7 +249,7 @@ export default function HeatmapPage({ onNavigate }) {
           </Typography>
 
           <Box sx={{ position: 'relative', width: '95%', mx: 'auto' }}>
-            <ResponsiveContainer width="100%" height={608}>
+            <ResponsiveContainer width="100%" height={608} onResize={handleChartResize}>
               <Treemap
                 data={treemapData}
                 dataKey="size"
@@ -246,29 +260,36 @@ export default function HeatmapPage({ onNavigate }) {
             </ResponsiveContainer>
             {/* Label overlay — painted after Recharts SVG, always on top */}
             <svg
-              style={{
-                position: 'absolute', top: 0, left: 0,
-                width: '100%', height: '100%',
-                pointerEvents: 'none',
-              }}
+              style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
+              width={chartDims.width || '100%'}
+              height={chartDims.height || 608}
+              viewBox={chartDims.width ? `0 0 ${chartDims.width} ${chartDims.height}` : undefined}
             >
-              {_labelQueue.map((lbl, i) => lbl.type === 'sector' ? (
-                <g key={i}>
-                  <rect x={lbl.x} y={lbl.y} width={lbl.width} height={24}
-                    fill="rgba(0,0,0,0.65)" />
-                  <text x={lbl.x + 6} y={lbl.y + 16}
+              {overlayLabels.map((lbl, i) => lbl.type === 'sector' && lbl.width > 50 ? (
+                <g key={`s-${i}`}>
+                  <defs>
+                    <clipPath id={`sector-clip-${i}`}>
+                      <rect x={lbl.x} y={lbl.y} width={lbl.width} height={22} />
+                    </clipPath>
+                  </defs>
+                  <rect x={lbl.x} y={lbl.y} width={lbl.width} height={22}
+                    fill="rgba(0,0,0,0.75)" />
+                  <text x={lbl.x + 6} y={lbl.y + 15}
                     fill="#ffffff" fontSize={11} fontWeight={700}
+                    dominantBaseline="auto"
+                    clipPath={`url(#sector-clip-${i})`}
                     style={{ userSelect: 'none' }}>
                     {lbl.name.toUpperCase()}
                   </text>
                 </g>
-              ) : (
-                <text key={i} x={lbl.x + 4} y={lbl.y + 11}
+              ) : lbl.type === 'industry' && lbl.width > 80 && lbl.height > 30 ? (
+                <text key={`i-${i}`} x={lbl.x + 4} y={lbl.y + 11}
                   fill="#888888" fontSize={9} fontStyle="italic"
+                  dominantBaseline="auto"
                   style={{ userSelect: 'none' }}>
                   {lbl.name}
                 </text>
-              ))}
+              ) : null)}
             </svg>
           </Box>
         </Box>
