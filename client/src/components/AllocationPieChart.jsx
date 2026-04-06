@@ -19,6 +19,7 @@ export default function AllocationPieChart({ positions }) {
   const [otherExpanded, setOtherExpanded] = useState(false);
   const [activeIndex, setActiveIndex] = useState(null);
   const containerRef = useRef(null);
+  const labelDataRef = useRef([]);
   const [chartSize, setChartSize] = useState({ width: 0, height: 0 });
 
   useEffect(() => {
@@ -96,7 +97,7 @@ export default function AllocationPieChart({ positions }) {
     }
   };
 
-  const baseRadius = Math.min(chartSize.width * 0.32 * 1.05, 120);
+  const baseRadius = Math.min(chartSize.width * 0.32 * 1.1845, 120);
   const outerR = Math.max(baseRadius, 70);
   const innerR = Math.round(outerR * 0.54);
 
@@ -119,32 +120,35 @@ export default function AllocationPieChart({ positions }) {
   const SMALL_THRESHOLD = 0.03;
   const MIN_LABEL_GAP = 13;
 
-  const buildLabelPositions = () => {
-    return data.map((entry, index) => {
-      if (index === activeIndex) return null;
+  const captureLabel = (props) => {
+    const { cx, cy, midAngle, outerRadius, index, name, pct, value } = props;
 
-      const total_ = data.reduce((s, d) => s + d.value, 0);
-      let cumulative = 0;
-      for (let i = 0; i < index; i++) cumulative += data[i].value;
-      const midAngle = 360 - (cumulative + entry.value / 2) / total_ * 360;
+    if (index === activeIndex) {
+      labelDataRef.current[index] = null;
+      return null;
+    }
 
-      const isSmall = total > 0 && entry.value / total < SMALL_THRESHOLD;
-      const radialOffset = isSmall ? 44 : 22;
+    const isSmall = total > 0 && value / total < SMALL_THRESHOLD;
+    const radialOffset = isSmall ? 44 : 22;
 
-      const cos = Math.cos(-RADIAN * midAngle);
-      const sin = Math.sin(-RADIAN * midAngle);
-      const cx_ = chartSize.width > 0 ? chartSize.width / 2 - 15 : 200;
-      const cy_ = 210;
+    const cos = Math.cos(-RADIAN * midAngle);
+    const sin = Math.sin(-RADIAN * midAngle);
 
-      const sx = cx_ + outerR * cos;
-      const sy = cy_ + outerR * sin;
-      const mx = cx_ + (outerR + radialOffset) * cos;
-      const my = cy_ + (outerR + radialOffset) * sin;
-      const isRight = cos >= 0;
-      const ex = mx + (isRight ? 1 : -1) * 16;
+    const sx = cx + outerRadius * cos;
+    const sy = cy + outerRadius * sin;
+    const mx = cx + (outerRadius + radialOffset) * cos;
+    const my = cy + (outerRadius + radialOffset) * sin;
+    const isRight = cos >= 0;
+    const ex = mx + (isRight ? 1 : -1) * 16;
 
-      return { index, midAngle, cos, sin, sx, sy, mx, my, ex, ey: my, isRight, entry, isSmall };
-    });
+    labelDataRef.current[index] = {
+      index, cx, cy, midAngle, cos, sin,
+      sx, sy, mx, my, ex, ey: my,
+      isRight, isSmall,
+      name, pct, value,
+    };
+
+    return null;
   };
 
   const resolveCollisions = (positions) => {
@@ -170,14 +174,14 @@ export default function AllocationPieChart({ positions }) {
   };
 
   const renderLabels = () => {
-    const raw = buildLabelPositions();
-    const resolved = resolveCollisions(raw);
+    const raw = labelDataRef.current.filter((p, i) => p && i !== activeIndex);
+    const resolved = resolveCollisions(raw.map(p => ({ ...p })));
 
-    return resolved.map(({ index, sx, sy, mx, my, ex, ey, isRight, entry }) => {
+    return resolved.map(({ index, sx, sy, mx, my, ex, ey, isRight, name, pct }) => {
       const fill = COLORS[index % COLORS.length];
       const textAnchor = isRight ? 'start' : 'end';
       const textX = ex + (isRight ? 6 : -6);
-      const displayName = entry.name.length > 14 ? entry.name.slice(0, 14) + '…' : entry.name;
+      const displayName = name.length > 14 ? name.slice(0, 14) + '…' : name;
 
       return (
         <g key={index}>
@@ -193,7 +197,7 @@ export default function AllocationPieChart({ positions }) {
             dominantBaseline="central"
             fill={fill}
           >
-            {`${displayName} ${entry.pct}%`}
+            {`${displayName} ${pct}%`}
           </text>
         </g>
       );
@@ -266,11 +270,12 @@ export default function AllocationPieChart({ positions }) {
           <PieChart>
             <Pie
               data={data}
-              cx={chartSize.width > 0 ? chartSize.width / 2 - 15 : '50%'}
+              cx={chartSize.width > 0 ? chartSize.width / 2 - 35 : '50%'}
               cy="50%"
               outerRadius={outerR}
               innerRadius={innerR}
               dataKey="value"
+              label={captureLabel}
               labelLine={false}
               style={{ cursor: 'pointer' }}
               activeIndex={activeIndex}
