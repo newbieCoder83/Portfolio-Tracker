@@ -4,10 +4,12 @@ import {
   MenuItem, Select, FormControl, InputLabel, Alert, CircularProgress,
 } from '@mui/material';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 export default function LoginPage() {
   const { login } = useAuth();
+  const navigate = useNavigate();
   const [apiKey, setApiKey] = useState('');
   const [apiSecret, setApiSecret] = useState('');
   const [environment, setEnvironment] = useState('live');
@@ -20,6 +22,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await login(apiKey, apiSecret, environment);
+      navigate('/dashboard');
     } catch (err) {
       setError(err.response?.data?.error || 'Login failed. Check your credentials.');
     } finally {

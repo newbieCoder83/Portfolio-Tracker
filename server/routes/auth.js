@@ -113,14 +113,11 @@ router.get('/status', async (req, res) => {
   }
 
   try {
-    const apiKey = decrypt(user.api_key_enc, user.iv_key, user.auth_tag_key);
-    const apiSecret = decrypt(user.api_secret_enc, user.iv_secret, user.auth_tag_secret);
+    // Decrypt to verify the key is still valid (no live API call)
+    decrypt(user.api_key_enc, user.iv_key, user.auth_tag_key);
 
-    // Validate credentials are still valid
-    const client = new T212Client(apiKey, apiSecret, user.environment);
-    await client.get('/api/v0/equity/account/summary', 'summary', false);
-
-    // Restore session
+    // Restore session from saved creds directly — skip live T212 validation
+    // to avoid rate-limit storms on repeated auth checks
     req.session.userId = 1;
     req.session.environment = user.environment;
 
