@@ -5,6 +5,7 @@ import { ThemeProvider, CssBaseline } from '@mui/material';
 import { Highcharts } from '@highcharts/react';
 import theme from './theme';
 import highchartsTheme from './highchartsTheme';
+import './styles/highchartsGrid.css';
 import App from './App';
 
 Highcharts.setOptions(highchartsTheme);

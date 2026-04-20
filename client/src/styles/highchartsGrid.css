@@ -1,0 +1,31 @@
+.hcg-dark {
+  /* Base */
+  --hcg-background: #111827;
+  --hcg-color: #e0e0e0;
+
+  /* Alternating rows */
+  --hcg-row-even-background: #0a0e17;
+
+  /* Header */
+  --hcg-header-background: #1e2433;
+  --hcg-header-color: #e0e0e0;
+
+  /* Hover — solid colour scaled by opacity (per Grid v2.x docs) */
+  --hcg-row-hover-background: rgba(255, 255, 255, 0.08);
+  --hcg-hover-opacity: 50%;
+
+  /* Borders */
+  --hcg-border-color: rgba(255, 255, 255, 0.06);
+  --hcg-border-width: 1px;
+  --hcg-border-style: solid;
+  --hcg-row-border-color: rgba(255, 255, 255, 0.06);
+  --hcg-column-border-color: rgba(255, 255, 255, 0.06);
+
+  /* Cell padding (Grid default is 0 — required for readable rows) */
+  --hcg-padding: 8px;
+  --hcg-horizontal-padding: 12px;
+
+  /* Typography */
+  --hcg-font-family: "Inter", "Roboto", "Helvetica", "Arial", sans-serif;
+  --hcg-font-size: 0.8rem;
+}
