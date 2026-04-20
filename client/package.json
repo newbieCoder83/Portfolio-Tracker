@@ -6,6 +6,7 @@
   "dependencies": {
     "@emotion/react": "^11.11.0",
     "@emotion/styled": "^11.11.0",
+    "@highcharts/grid-lite-react": "^1.0.0",
     "@highcharts/react": "^4.2.1",
     "@mui/icons-material": "^5.15.0",
     "@mui/material": "^5.15.0",
