@@ -44,7 +44,11 @@ export function plCellFormatter() {
   const value = Number(this.value ?? 0);
   const color = value >= 0 ? '#4caf50' : '#f44336';
   const sign = value > 0 ? '+' : '';
-  return `<span style="color:${color};font-weight:600">${sign}${value.toFixed(2)}</span>`;
+  const formatted = new Intl.NumberFormat('en-GB', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+  return `<span style="color:${color};font-weight:600">${sign}${formatted}</span>`;
 }
 
 export function currencyCellFormatter() {
@@ -60,4 +64,11 @@ export function percentCellFormatter() {
   const value = Number(this.value ?? 0);
   const sign = value > 0 ? '+' : '';
   return `${sign}${value.toFixed(2)}%`;
+}
+
+export function plPercentCellFormatter() {
+  const value = Number(this.value ?? 0);
+  const color = value >= 0 ? '#4caf50' : '#f44336';
+  const sign = value > 0 ? '+' : '';
+  return `<span style="color:${color}">${sign}${value.toFixed(2)}%</span>`;
 }
