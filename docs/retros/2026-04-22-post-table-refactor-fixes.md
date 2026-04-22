@@ -68,7 +68,7 @@ Reason: this document is meant to wrap up the small fixes that landed after the 
   `client/src/pages/HeatmapPage.jsx`
   `client/src/utils/highchartsUtils.js`
   `client/src/utils/tickerUtils.js`
-  `docs/retros/2026-04-22-post-refactor-fixes.md`
+  `docs/retros/2026-04-22-post-table-refactor-fixes.md`
 - `npm.cmd run build` works from the repo root.
 - Browser verification was completed for:
   - favicon visible in the tab
