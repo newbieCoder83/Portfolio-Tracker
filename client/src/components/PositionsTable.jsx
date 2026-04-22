@@ -1,7 +1,8 @@
 import React, { useMemo } from 'react';
 import { Card, CardContent, Typography } from '@mui/material';
 import HighchartsGrid from './HighchartsGrid';
-import { plCellFormatter, plPercentCellFormatter } from '../utils/highchartsUtils';
+import { currencyCellFormatter, plCellFormatter, plPercentCellFormatter } from '../utils/highchartsUtils';
+import { resolveDisplayTicker } from '../utils/tickerUtils';
 
 const COLUMNS = [
   { id: 'instrument_name', label: 'Name', align: 'left' },
@@ -9,12 +10,12 @@ const COLUMNS = [
   { id: 'quantity', label: 'Qty', align: 'right', format: '{value:,.2f}' },
   { id: 'average_price_paid', label: 'Avg Price', align: 'right', format: '{value:,.2f}' },
   { id: 'current_price', label: 'Price', align: 'right', format: '{value:,.2f}' },
-  { id: 'wallet_total_cost', label: 'Cost', align: 'right', format: '{value:,.2f}' },
-  { id: 'wallet_current_value', label: 'Value', align: 'right', format: '{value:,.2f}', emphasis: true },
+  { id: 'wallet_total_cost', label: 'Cost', align: 'right', formatter: currencyCellFormatter },
+  { id: 'wallet_current_value', label: 'Value', align: 'right', formatter: currencyCellFormatter, emphasis: true },
   { id: 'pl', label: 'P/L', align: 'right', formatter: plCellFormatter },
   { id: 'plPct', label: 'P/L %', align: 'right', formatter: plPercentCellFormatter },
   { id: 'weight', label: 'Weight %', align: 'right', format: '{value:,.1f}%' },
-  { id: 'divIncome', label: 'Div Income', align: 'right', format: '{value:,.2f}' },
+  { id: 'divIncome', label: 'Div Income', align: 'right', formatter: currencyCellFormatter },
   { id: 'yield', label: 'Yield %', align: 'right', format: '{value:,.1f}%' },
 ];
 
@@ -63,7 +64,7 @@ export default function PositionsTable({ positions, dividends, totalValue }) {
 
   const columnData = useMemo(() => ({
     instrument_name: rows.map((row) => row.instrument_name || ''),
-    ticker: rows.map((row) => row.ticker || ''),
+    ticker: rows.map((row) => resolveDisplayTicker(row.ticker, row.instrument_name)),
     quantity: rows.map((row) => row.quantity ?? 0),
     average_price_paid: rows.map((row) => row.average_price_paid ?? 0),
     current_price: rows.map((row) => row.current_price ?? 0),

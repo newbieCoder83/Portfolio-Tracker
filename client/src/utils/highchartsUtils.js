@@ -45,9 +45,11 @@ export function plCellFormatter() {
   const color = value >= 0 ? '#4caf50' : '#f44336';
   const sign = value > 0 ? '+' : '';
   const formatted = new Intl.NumberFormat('en-GB', {
+    style: 'currency',
+    currency: 'GBP',
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(value);
+  }).format(Math.abs(value));
   return `<span style="color:${color};font-weight:600">${sign}${formatted}</span>`;
 }
 

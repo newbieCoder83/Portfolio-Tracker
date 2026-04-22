@@ -3,6 +3,7 @@ import { Box, Typography, CircularProgress, Alert } from '@mui/material';
 import { Treemap } from 'recharts';
 import Layout from '../components/Layout';
 import api from '../api/client';
+import { cleanDisplayTicker } from '../utils/tickerUtils';
 
 // Interpolate a colour between #C0392B (deep red, -5%), #1A1A2E (neutral, 0%),
 // and #00A850 (deep green, +5%). Clamps at ±5%.
@@ -72,10 +73,7 @@ function CustomContent(props) {
   // depth 3: Stock tile
   const bgColor = getPctColor(pctChange, failed);
   const sign = (pctChange >= 0) ? '+' : '';
-  const cleanTicker = (ticker || name)
-    .replace(/_US_EQ$/, '')
-    .replace(/_EQ$/, '')
-    .replace(/l$/, '');
+  const cleanTicker = cleanDisplayTicker(ticker || name);
   const label = (name && name !== ticker) ? name : cleanTicker;
 
   const showText = width >= 40 && height >= 28;
