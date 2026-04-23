@@ -37,6 +37,26 @@ export const responsiveRules = [
   },
 ];
 
+export function getActiveVisibleSeries(chart) {
+  if (!chart?.series?.length) {
+    return null;
+  }
+
+  return [...chart.series].reverse().find((series) => {
+    if (!series?.visible || series.options?.isInternal) {
+      return false;
+    }
+
+    return typeof (series.options?.custom?.level ?? series.userOptions?.custom?.level) === 'string';
+  });
+}
+
+export function getActiveVisibleSeriesLevel(chart) {
+  const activeSeries = getActiveVisibleSeries(chart);
+
+  return activeSeries?.options?.custom?.level ?? activeSeries?.userOptions?.custom?.level ?? null;
+}
+
 // --- Highcharts Grid helpers ---
 // Invoked by Grid as cell formatters — `this` is the cell context, value via this.value.
 
