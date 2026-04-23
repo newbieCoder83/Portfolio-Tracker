@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   AppBar, Toolbar, Typography, Button, Box, CircularProgress, Chip, Tabs, Tab,
 } from '@mui/material';
@@ -9,22 +9,52 @@ import { useAuth } from '../context/AuthContext';
 import api from '../api/client';
 
 export default function Layout({ children, onSyncComplete }) {
-  const { logout, lastSync, setLastSync, environment } = useAuth();
+  const {
+    logout,
+    lastSync,
+    setLastSync,
+    environment,
+    syncStatus,
+    setSyncStatus,
+    fetchSyncStatus,
+  } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const currentPage = location.pathname.slice(1) || 'dashboard';
-  const [syncing, setSyncing] = useState(false);
+  const syncing = syncStatus.syncing;
 
   const handleSync = async () => {
-    setSyncing(true);
+    if (syncing) {
+      return;
+    }
+
+    setSyncStatus({
+      syncing: true,
+      syncType: 'incremental',
+      syncStartedAt: new Date().toISOString(),
+    });
+
     try {
       const { data } = await api.post('/api/sync');
       setLastSync(data.lastSync);
       if (onSyncComplete) onSyncComplete();
     } catch (err) {
+      if (err.response?.status === 409) {
+        setSyncStatus({
+          syncing: Boolean(err.response.data.syncing),
+          syncType: err.response.data.syncType || null,
+          syncStartedAt: err.response.data.syncStartedAt || null,
+        });
+        return;
+      }
+
       console.error('Sync failed:', err);
-    } finally {
-      setSyncing(false);
+    }
+
+    try {
+      await fetchSyncStatus();
+    } catch (statusErr) {
+      console.error('Could not refresh sync status:', statusErr);
     }
   };
 
@@ -58,9 +88,17 @@ export default function Layout({ children, onSyncComplete }) {
             disabled={syncing}
             variant="outlined"
             size="small"
-            sx={{ mr: 1 }}
+            sx={{
+              mr: 1,
+              minWidth: 108,
+              '&.Mui-disabled': {
+                color: 'rgba(255,255,255,0.55)',
+                borderColor: 'rgba(255,255,255,0.1)',
+                backgroundColor: 'rgba(0,0,0,0.28)',
+              },
+            }}
           >
-            {syncing ? 'Syncing...' : 'Sync Now'}
+            {syncing ? 'Synching' : 'Sync Now'}
           </Button>
           <Button
             startIcon={<LogoutIcon />}

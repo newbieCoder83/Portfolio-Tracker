@@ -4,6 +4,7 @@ const db = require('../db/connection');
 const { encrypt, decrypt } = require('../services/crypto');
 const T212Client = require('../services/t212Client');
 const { fullSync, getSyncState } = require('../services/syncService');
+const { getSyncStatus, runTrackedSync } = require('../services/syncStatus');
 
 /**
  * POST /api/auth/login
@@ -69,6 +70,21 @@ router.post('/login', async (req, res) => {
     req.session.userId = 1;
     req.session.environment = environment;
 
+    const currentSync = getSyncStatus();
+    let syncType = currentSync.syncing ? currentSync.type : 'full';
+    let syncStartedAt = currentSync.startedAt;
+    let fullSyncPromise = null;
+
+    if (!currentSync.syncing) {
+      fullSyncPromise = runTrackedSync(
+        'full',
+        () => fullSync(apiKey, apiSecret, environment)
+      );
+      syncStartedAt = getSyncStatus().startedAt;
+    } else {
+      console.log(`[Auth] Skipping new full sync after login because ${currentSync.type} sync is already running`);
+    }
+
     // Trigger full sync in background (don't block login response)
     res.json({
       success: true,
@@ -76,14 +92,19 @@ router.post('/login', async (req, res) => {
       accountId: summary.id,
       currency: summary.currency,
       syncing: true,
+      syncType,
+      syncStartedAt,
     });
 
     // Full sync after response
-    try {
-      await fullSync(apiKey, apiSecret, environment);
-      console.log('[Auth] Full sync completed after login');
-    } catch (syncErr) {
-      console.error('[Auth] Full sync failed after login:', syncErr.message);
+    if (fullSyncPromise) {
+      fullSyncPromise
+        .then(() => {
+          console.log('[Auth] Full sync completed after login');
+        })
+        .catch((syncErr) => {
+          console.error('[Auth] Full sync failed after login:', syncErr.message);
+        });
     }
   } catch (err) {
     console.error('[Auth] Login error:', err.message);
