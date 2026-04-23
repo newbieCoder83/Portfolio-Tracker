@@ -1,33 +1,201 @@
-import React, { useMemo, useState } from 'react';
-import { Card, CardContent, Typography, Box, Button, LinearProgress } from '@mui/material';
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import React, { useMemo } from 'react';
+import { Card, CardContent, Typography, Box } from '@mui/material';
+import { Chart } from '@highcharts/react';
+import { Drilldown } from '@highcharts/react/options/drilldown';
+import { formatCurrency, currencyYAxisConfig } from '../utils/highchartsUtils';
+
+const monthTickFormatter = new Intl.DateTimeFormat('en-GB', {
+  month: 'short',
+  year: 'numeric',
+  timeZone: 'UTC',
+});
+
+function truncateCategoryLabel(value) {
+  const label = String(value ?? '');
+  return label.length > 18 ? `${label.slice(0, 18)}...` : label;
+}
+
+function parseMonthToUtc(monthKey) {
+  const [year, month] = String(monthKey).split('-').map(Number);
+
+  if (!Number.isInteger(year) || !Number.isInteger(month)) {
+    return null;
+  }
+
+  return Date.UTC(year, month - 1, 1);
+}
+
+function formatMonthLabel(value) {
+  const timestamp = Number(value);
+
+  if (!Number.isFinite(timestamp)) {
+    return String(value ?? '');
+  }
+
+  return monthTickFormatter.format(new Date(timestamp));
+}
+
+function buildDatetimeXAxisConfig() {
+  return {
+    type: 'datetime',
+    tickPixelInterval: 140,
+    labels: {
+      rotation: 0,
+      autoRotation: undefined,
+      style: { fontSize: '11px' },
+      formatter() {
+        return formatMonthLabel(this.value);
+      },
+    },
+  };
+}
+
+function buildCategoryXAxisConfig() {
+  return {
+    type: 'category',
+    labels: {
+      rotation: -45,
+      style: { fontSize: '10px' },
+      formatter() {
+        return truncateCategoryLabel(this.value);
+      },
+    },
+  };
+}
+
+function monthlyDividendTooltipFormatter() {
+  const point = this.point;
+  const amount = Number(point?.y ?? 0);
+
+  if (point?.options?.drilldown) {
+    const monthLabel = point?.options?.custom?.monthLabel || point?.name;
+    return `${monthLabel}<br/><b>${formatCurrency(amount)}</b>`;
+  }
+
+  const fullName = point?.options?.custom?.fullName || point?.name || 'Unknown';
+  const pct = point?.options?.custom?.pct;
+  const pctText = Number.isFinite(pct) ? ` (${pct.toFixed(1)}%)` : '';
+
+  return `${fullName}<br/><b>${formatCurrency(amount)}</b>${pctText}`;
+}
 
 export default function MonthlyDividendChart({ dividends }) {
-  const [selectedMonth, setSelectedMonth] = useState(null);
+  const { monthlySeriesData, drilldownSeries } = useMemo(() => {
+    if (!dividends || dividends.length === 0) {
+      return { monthlySeriesData: [], drilldownSeries: [] };
+    }
 
-  const monthlyData = useMemo(() => {
-    if (!dividends || dividends.length === 0) return [];
     const byMonth = {};
-    dividends.forEach((d) => {
-      if (!d.paid_on) return;
-      const month = d.paid_on.slice(0, 7); // YYYY-MM
-      if (!byMonth[month]) byMonth[month] = { month, total: 0, companies: {} };
-      byMonth[month].total += d.amount || 0;
-      const name = d.instrument_name || d.ticker;
-      byMonth[month].companies[name] = (byMonth[month].companies[name] || 0) + (d.amount || 0);
+
+    dividends.forEach((dividend) => {
+      if (!dividend.paid_on) {
+        return;
+      }
+
+      const month = dividend.paid_on.slice(0, 7);
+      const monthStartUtc = parseMonthToUtc(month);
+      if (monthStartUtc === null) {
+        return;
+      }
+
+      const amount = Number(dividend.amount ?? 0);
+      if (!Number.isFinite(amount)) {
+        return;
+      }
+
+      const companyName = dividend.instrument_name || dividend.ticker || 'Unknown';
+
+      if (!byMonth[month]) {
+        byMonth[month] = {
+          month,
+          monthStartUtc,
+          total: 0,
+          companies: {},
+        };
+      }
+
+      byMonth[month].total += amount;
+      byMonth[month].companies[companyName] = (byMonth[month].companies[companyName] || 0) + amount;
     });
-    return Object.values(byMonth).sort((a, b) => a.month.localeCompare(b.month));
+
+    const monthlyEntries = Object.values(byMonth).sort((a, b) => a.monthStartUtc - b.monthStartUtc);
+
+    return {
+      monthlySeriesData: monthlyEntries.map((entry) => ({
+        name: entry.month,
+        x: entry.monthStartUtc,
+        y: entry.total,
+        drilldown: entry.month,
+        custom: {
+          monthLabel: formatMonthLabel(entry.monthStartUtc),
+        },
+      })),
+      // Build the per-month company series once so drilldown uses the same grouped source data.
+      drilldownSeries: monthlyEntries.map((entry) => ({
+        id: entry.month,
+        type: 'column',
+        name: `${entry.month} Breakdown`,
+        colorByPoint: true,
+        data: Object.entries(entry.companies)
+          .map(([name, amount]) => ({
+            name,
+            y: amount,
+            custom: {
+              fullName: name,
+              pct: entry.total > 0 ? (amount / entry.total) * 100 : 0,
+            },
+          }))
+          .sort((a, b) => b.y - a.y),
+      })),
+    };
   }, [dividends]);
 
-  const drillDown = useMemo(() => {
-    if (!selectedMonth) return null;
-    const entry = monthlyData.find((m) => m.month === selectedMonth);
-    if (!entry) return null;
-    return Object.entries(entry.companies)
-      .map(([name, amount]) => ({ name, amount, pct: entry.total > 0 ? (amount / entry.total) * 100 : 0 }))
-      .sort((a, b) => b.amount - a.amount);
-  }, [selectedMonth, monthlyData]);
+  const chartOptions = useMemo(() => ({
+    chart: {
+      type: 'column',
+      backgroundColor: 'transparent',
+      spacingTop: 8,
+      spacingBottom: 28,
+      events: {
+        drilldown() {
+          this.xAxis[0].update(buildCategoryXAxisConfig(), false);
+        },
+        drillup() {
+          this.xAxis[0].update(buildDatetimeXAxisConfig(), false);
+        },
+      },
+    },
+    title: { text: null },
+    credits: { enabled: false },
+    legend: { enabled: false },
+    xAxis: buildDatetimeXAxisConfig(),
+    yAxis: {
+      ...currencyYAxisConfig,
+      title: { text: null },
+    },
+    tooltip: {
+      useHTML: true,
+      formatter: monthlyDividendTooltipFormatter,
+    },
+    plotOptions: {
+      series: {
+        animation: { duration: 400 },
+      },
+      column: {
+        borderRadius: 4,
+        pointPadding: 0.08,
+      },
+    },
+    series: [
+      {
+        type: 'column',
+        name: 'Monthly Dividends',
+        data: monthlySeriesData,
+        color: '#66bb6a',
+        dataLabels: { enabled: false },
+      },
+    ],
+  }), [monthlySeriesData]);
 
   if (!dividends || dividends.length === 0) {
     return (
@@ -40,71 +208,27 @@ export default function MonthlyDividendChart({ dividends }) {
     );
   }
 
-  const handleBarClick = (data) => {
-    if (data && data.activePayload && data.activePayload[0]) {
-      setSelectedMonth(data.activePayload[0].payload.month);
-    }
-  };
-
-  if (drillDown) {
-    return (
-      <Card sx={{ height: '100%' }}>
-        <CardContent>
-          <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-            <Button
-              startIcon={<ArrowBackIcon />}
-              onClick={() => setSelectedMonth(null)}
-              size="small"
-              sx={{ mr: 1 }}
-            >
-              Back
-            </Button>
-            <Typography variant="h6">{selectedMonth} Breakdown</Typography>
-          </Box>
-          {drillDown.map((item) => (
-            <Box key={item.name} sx={{ mb: 1.5 }}>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography variant="body2">{item.name}</Typography>
-                <Typography variant="body2" fontWeight={600}>
-                  {item.amount.toLocaleString('en-GB', { minimumFractionDigits: 2 })} ({item.pct.toFixed(1)}%)
-                </Typography>
-              </Box>
-              <LinearProgress
-                variant="determinate"
-                value={item.pct}
-                sx={{
-                  height: 8,
-                  borderRadius: 4,
-                  bgcolor: 'rgba(255,255,255,0.05)',
-                  '& .MuiLinearProgress-bar': { bgcolor: '#66bb6a', borderRadius: 4 },
-                }}
-              />
-            </Box>
-          ))}
-        </CardContent>
-      </Card>
-    );
-  }
-
   return (
     <Card sx={{ height: '100%' }}>
       <CardContent>
         <Typography variant="h6" gutterBottom>Monthly Dividends</Typography>
         <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
-          Click a bar to see company breakdown
+          Click a month to drill down by company. Use the breadcrumb to go back.
         </Typography>
-        <ResponsiveContainer width="100%" height={280}>
-          <BarChart data={monthlyData} onClick={handleBarClick} style={{ cursor: 'pointer' }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
-            <XAxis dataKey="month" tick={{ fontSize: 10 }} stroke="#666" />
-            <YAxis tick={{ fontSize: 11 }} stroke="#666" />
-            <Tooltip
-              contentStyle={{ backgroundColor: '#111827', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8 }}
-              formatter={(v) => [v.toLocaleString('en-GB', { minimumFractionDigits: 2 }), 'Dividends']}
+        <Box sx={{ height: 440 }}>
+          <Chart
+            options={chartOptions}
+            containerProps={{ style: { width: '100%', height: '100%' } }}
+          >
+            <Drilldown
+              series={drilldownSeries}
+              breadcrumbs={{
+                floating: false,
+                position: { align: 'left' },
+              }}
             />
-            <Bar dataKey="total" fill="#66bb6a" radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
+          </Chart>
+        </Box>
       </CardContent>
     </Card>
   );
