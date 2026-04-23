@@ -15,6 +15,8 @@ const monthOnlyTickFormatter = new Intl.DateTimeFormat('en-GB', {
   timeZone: 'UTC',
 });
 
+const MONTHLY_DIVIDEND_X_AXIS_ID = 'monthly-dividend-x-axis';
+
 function getYearDrilldownId(year) {
   return `year-${year}`;
 }
@@ -118,6 +120,13 @@ function getXAxisConfigForLevel(level) {
   }
 
   return buildYearXAxisConfig();
+}
+
+function buildXAxisUpdatePayload(level) {
+  return {
+    id: MONTHLY_DIVIDEND_X_AXIS_ID,
+    ...getXAxisConfigForLevel(level),
+  };
 }
 
 function monthlyDividendTooltipFormatter() {
@@ -257,7 +266,10 @@ export default function MonthlyDividendChart({ dividends }) {
     title: { text: null },
     credits: { enabled: false },
     legend: { enabled: false },
-    xAxis: buildYearXAxisConfig(),
+    xAxis: {
+      id: MONTHLY_DIVIDEND_X_AXIS_ID,
+      ...buildYearXAxisConfig(),
+    },
     yAxis: {
       ...currencyYAxisConfig,
       title: { text: null },
@@ -308,8 +320,10 @@ export default function MonthlyDividendChart({ dividends }) {
       return;
     }
 
-    chart.xAxis[0].update(getXAxisConfigForLevel(activeLevel), false);
-    chart.redraw(false);
+    chart.update({
+      xAxis: [buildXAxisUpdatePayload(activeLevel)],
+    }, true, true, false);
+
     lastAppliedAxisStateRef.current = axisStateKey;
   };
 
