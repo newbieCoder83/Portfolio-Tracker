@@ -1,9 +1,10 @@
-# Trading 212 Public API — Complete Reference
+# Trading 212 Public API - Complete Reference
 
 > **This file is the single source of truth for API schemas and endpoints.**
 > Do NOT use training data, wrapper libraries, or guessed field names.
 > Every field name, nesting structure, and rate limit below comes directly
-> from the official docs at https://docs.trading212.com (April 2026).
+> from the official docs at https://docs.trading212.com and the downloadable
+> OpenAPI description, verified on 2026-04-23.
 
 ---
 
@@ -12,14 +13,18 @@
 - **Status:** Beta, under active development
 - **Account types:** Invest and Stocks ISA only (no CFD)
 - **Order execution:** Primary account currency only
-- **Multi-currency:** Not supported — all values returned in primary account currency
+- **Multi-currency:** Not supported - all values returned in primary account currency
+- **IP restrictions:** Optional allow-listing is supported in Trading 212 account settings
 
-### Base URLs
+### API Roots
 
-| Environment | Base URL |
-|---|---|
-| Live (Real Money) | `https://live.trading212.com` |
-| Paper Trading (Demo) | `https://demo.trading212.com` |
+| Environment | Official API root | Host used in this project |
+|---|---|---|
+| Live (Real Money) | `https://live.trading212.com/api/v0` | `https://live.trading212.com` |
+| Paper Trading (Demo) | `https://demo.trading212.com/api/v0` | `https://demo.trading212.com` |
+
+The official docs present the full API root including `/api/v0`.
+This project stores the host only and appends request paths that already start with `/api/v0/...`.
 
 ---
 
@@ -40,21 +45,21 @@ api_key = "<YOUR_API_KEY>"
 api_secret = "<YOUR_API_SECRET>"
 
 credentials_string = f"{api_key}:{api_secret}"
-encoded = base64.b64encode(credentials_string.encode('utf-8')).decode('utf-8')
+encoded = base64.b64encode(credentials_string.encode("utf-8")).decode("utf-8")
 auth_header = f"Basic {encoded}"
 ```
 
 ```javascript
 // Node.js
-const auth = 'Basic ' + Buffer.from(`${apiKey}:${apiSecret}`).toString('base64');
+const auth = "Basic " + Buffer.from(`${apiKey}:${apiSecret}`).toString("base64");
 ```
 
 ### Generating API Keys
 
-Users generate keys from: Settings → API (Beta) in the Trading 212 app.
+Users generate keys from: Settings -> API (Beta) in the Trading 212 app.
 Two credentials are provided:
-1. **API Key** — acts as the username
-2. **API Secret** — acts as the password (shown only once after generation)
+1. **API Key** - acts as the username
+2. **API Secret** - acts as the password (shown only once after generation)
 
 ---
 
@@ -65,11 +70,11 @@ All rate limits are **per-account** (not per-key or per-IP).
 ### Response Headers
 
 Every response includes:
-- `x-ratelimit-limit` — Total requests allowed in the period
-- `x-ratelimit-period` — Period duration in seconds
-- `x-ratelimit-remaining` — Requests left in current period
-- `x-ratelimit-reset` — Unix timestamp when limit fully resets
-- `x-ratelimit-used` — Requests already made in current period
+- `x-ratelimit-limit` - Total requests allowed in the period
+- `x-ratelimit-period` - Period duration in seconds
+- `x-ratelimit-remaining` - Requests left in current period
+- `x-ratelimit-reset` - Unix timestamp when limit fully resets
+- `x-ratelimit-used` - Requests already made in current period
 
 ### 429 Handling
 
@@ -103,17 +108,20 @@ On HTTP 429, read the `x-ratelimit-reset` header (Unix epoch seconds), calculate
 All list endpoints (dividends, orders, transactions) use **cursor-based pagination**.
 
 ### Parameters
-- `limit` (integer) — Max items per page. Default: 20, Maximum: 50
-- `cursor` (string|number) — Pointer to start of next page
+
+- `limit` (integer) - Max items per page. Default: 20, Maximum: 50
+- `cursor` (string|number) - Pointer to start of next page
 
 ### How to paginate
+
 1. Make initial request with optional `limit`, no `cursor`
 2. Response contains `items` array and `nextPagePath` string
-3. If `nextPagePath` is `null` → you've reached the end
-4. If `nextPagePath` is not null → use the **entire string** as the path for your next request
+3. If `nextPagePath` is `null` -> you've reached the end
+4. If `nextPagePath` is not null -> use the **entire string** as the path for your next request
 5. Repeat until `nextPagePath` is `null`
 
 ### Example response
+
 ```json
 {
   "items": [ ... ],
@@ -130,6 +138,10 @@ All list endpoints (dividends, orders, transactions) use **cursor-based paginati
 ### GET /api/v0/equity/account/summary
 
 Provides a breakdown of your account's cash and investment metrics.
+
+**Current standard note:** The current Accounts section and downloadable OpenAPI spec use `GET /api/v0/equity/account/summary`.
+Some Trading 212 quickstart/search snippets still show the older `GET /api/v0/equity/account/cash` example.
+For this project, treat `/api/v0/equity/account/summary` as the current standard endpoint.
 
 **Rate limit:** 1 req / 5s
 
@@ -178,7 +190,7 @@ Fetch all open positions for your account. Returns an **array** of position obje
 **Rate limit:** 1 req / 1s
 
 **Query parameters:**
-- `ticker` (string, optional) — Filter by ticker, e.g. "AAPL_US_EQ"
+- `ticker` (string, optional) - Filter by ticker, e.g. "AAPL_US_EQ"
 
 **Response 200 (array of):**
 
@@ -237,9 +249,9 @@ Fetch paid out dividends. Paginated.
 **Rate limit:** 6 req / 60s
 
 **Query parameters:**
-- `cursor` (integer, optional) — Pagination cursor
-- `ticker` (string, optional) — Filter by ticker
-- `limit` (integer, optional) — Max 50
+- `cursor` (integer, optional) - Pagination cursor
+- `ticker` (string, optional) - Filter by ticker
+- `limit` (integer, optional) - Max 50
 
 **Response 200:**
 
@@ -257,7 +269,7 @@ Fetch paid out dividends. Paginated.
         "name": "Vanguard S&P 500 ETF",
         "ticker": "VUSA_LSE_EQ"
       },
-      "paidOn": "2024-03-20",
+      "paidOn": "2024-03-20T00:00:00Z",
       "quantity": 50.0,
       "reference": "div-ref-123456",
       "ticker": "VUSA_LSE_EQ",
@@ -282,7 +294,7 @@ Fetch paid out dividends. Paginated.
 | `instrument.isin` | string | ISIN |
 | `instrument.name` | string | Instrument name |
 | `instrument.ticker` | string | Unique ticker |
-| `paidOn` | string | Date the dividend was paid |
+| `paidOn` | string | ISO 8601 timestamp for when the dividend was paid |
 | `quantity` | number | Number of shares held at payment |
 | `reference` | string | Unique reference ID for this dividend payment |
 | `ticker` | string | Ticker identifier |
@@ -301,9 +313,9 @@ Fetch historical order data. Paginated. **Response has a nested structure with `
 **Rate limit:** 6 req / 60s
 
 **Query parameters:**
-- `cursor` (integer, optional) — Pagination cursor
-- `ticker` (string, optional) — Filter by ticker
-- `limit` (integer, optional) — Max 50
+- `cursor` (integer, optional) - Pagination cursor
+- `ticker` (string, optional) - Filter by ticker
+- `limit` (integer, optional) - Max 50
 
 **Response 200:**
 
@@ -416,9 +428,9 @@ Fetch deposit/withdrawal/fee movements.
 **Rate limit:** 6 req / 60s
 
 **Query parameters:**
-- `cursor` (string, optional) — Pagination cursor
-- `time` (string, optional) — Retrieve transactions from this time
-- `limit` (integer, optional) — Max 50
+- `cursor` (string, optional) - Pagination cursor
+- `time` (string, optional) - Retrieve transactions from this time
+- `limit` (integer, optional) - Max 50
 
 **Response 200:**
 
@@ -524,7 +536,7 @@ Retrieves all exchanges and their working schedules. Data refreshed every 10 min
 
 ### GET /api/v0/equity/orders
 
-Fetch all **pending** (active) orders. NOT paginated — returns a flat array.
+Fetch all **pending** (active) orders. NOT paginated - returns a flat array.
 
 **Rate limit:** 1 req / 5s
 
@@ -562,7 +574,7 @@ Fetch all **pending** (active) orders. NOT paginated — returns a flat array.
 
 ### POST /api/v0/equity/orders/market
 
-Place a market order. **Not idempotent — duplicate requests create duplicate orders.**
+Place a market order. **Not idempotent - duplicate requests create duplicate orders.**
 
 **Rate limit:** 50 req / 60s
 
@@ -664,7 +676,7 @@ List generated CSV reports and their status.
 **Rate limit:** 1 req / 60s
 
 **Workflow:**
-1. POST /api/v0/equity/history/exports to request a report → get `reportId`
+1. POST /api/v0/equity/history/exports to request a report -> get `reportId`
 2. GET /api/v0/equity/history/exports periodically to check status
 3. When status is `"Finished"`, `downloadLink` contains URL
 
@@ -696,9 +708,10 @@ All endpoints can return:
 
 1. **Selling orders use negative quantity.** To sell 10 shares: `quantity: -10`
 2. **Orders are NOT idempotent.** Sending the same request twice creates two orders.
-3. **Pagination uses `nextPagePath`.** Use the entire string as your next request path — it includes the cursor and limit parameters.
+3. **Pagination uses `nextPagePath`.** Use the entire string as your next request path - it includes the cursor and limit parameters.
 4. **Positions endpoint returns an array**, not a paginated object. No nextPagePath.
 5. **The `instrument` object** appears in positions, dividends, orders, and pending orders with the same structure: `{ currency, isin, name, ticker }`.
 6. **Historical orders have TWO sub-objects:** `order` (the request) and `fill` (the execution). Always access fields via `item.order.side`, `item.fill.price`, etc.
 7. **The `walletImpact` object** appears in both positions and order fills but with different fields. In positions: `{ currency, currentValue, fxImpact, totalCost, unrealizedProfitLoss }`. In fills: `{ currency, fxRate, netValue, realisedProfitLoss, taxes }`.
-8. **Instruments endpoint** is rate-limited to 1 request per 50 seconds — cache aggressively.
+8. **Instruments endpoint** is rate-limited to 1 request per 50 seconds - cache aggressively.
+9. **Dividend `paidOn` is documented as `date-time` in the current OpenAPI spec.** If the UI only wants `YYYY-MM-DD`, normalise it at the display layer instead of assuming the API will always send a date-only string.
