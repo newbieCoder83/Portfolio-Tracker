@@ -5,10 +5,8 @@ import SummaryCards from '../components/SummaryCards';
 import AllocationPieChart from '../components/AllocationPieChart';
 import PositionsTable from '../components/PositionsTable';
 import BenchmarkChart from '../components/BenchmarkChart';
-import DrawdownChart from '../components/DrawdownChart';
 import MonthlyDividendChart from '../components/MonthlyDividendChart';
 import DividendsByCompany from '../components/DividendsByCompany';
-import DividendYieldChart from '../components/DividendYieldChart';
 import DividendHistoryTable from '../components/DividendHistoryTable';
 import PortfolioValueChart from '../components/PortfolioValueChart';
 import api from '../api/client';
@@ -85,18 +83,15 @@ export default function DashboardPage() {
         />
       </Box>
 
-      {/* Row 3: Benchmark + Drawdown */}
+      {/* Row 3: Benchmark comparison */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} md={7}>
+        <Grid item xs={12}>
           <BenchmarkChart
             orders={data.orders}
             snapshots={data.snapshots}
             totalValue={data.summary?.total_value || 0}
             totalCost={data.summary?.invest_total_cost || 0}
           />
-        </Grid>
-        <Grid item xs={12} md={5}>
-          <DrawdownChart snapshots={data.snapshots} />
         </Grid>
       </Grid>
 
@@ -110,12 +105,9 @@ export default function DashboardPage() {
         </Grid>
       </Grid>
 
-      {/* Row 5: Dividend yield + History table */}
+      {/* Row 5: Dividend history */}
       <Grid container spacing={3} sx={{ mb: 3 }}>
-        <Grid item xs={12} md={5}>
-          <DividendYieldChart positions={data.positions} dividends={data.dividends} />
-        </Grid>
-        <Grid item xs={12} md={7}>
+        <Grid item xs={12}>
           <DividendHistoryTable dividends={data.dividends} />
         </Grid>
       </Grid>

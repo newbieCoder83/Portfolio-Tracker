@@ -74,3 +74,19 @@ export function plPercentCellFormatter() {
   const sign = value > 0 ? '+' : '';
   return `<span style="color:${color}">${sign}${value.toFixed(2)}%</span>`;
 }
+
+export function dividendAmountCellFormatter() {
+  if (this.value === null || this.value === undefined) {
+    return '—';
+  }
+
+  const value = Number(this.value);
+  if (!Number.isFinite(value)) {
+    return '—';
+  }
+
+  return new Intl.NumberFormat('en-GB', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  }).format(value);
+}
