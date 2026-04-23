@@ -96,6 +96,7 @@ This retro replaces several intermediate draft retros written during debugging. 
 ## Issues Encountered
 
 - The first pass at correcting the labels solved the numeric label problem, but over-constrained the axis and broke rendering on drill-up and on the final company drilldown.
+- A later attempt was made to smooth the breadcrumb drill-up flash by delaying the x-axis resync until after the drill animation duration. It did not produce a better visual result in manual testing, so it was not kept.
 - Several intermediate retros were created during debugging. They were useful while investigating, but are intentionally superseded by this final retro.
 - The existing Vite chunk-size warning still appears during production builds. None of the monthly dividend chart changes introduced it.
 
@@ -126,6 +127,7 @@ This retro replaces several intermediate draft retros written during debugging. 
 - The month view shows short month names instead of raw `YYYY-MM` strings.
 - The company view shows company labels again instead of numeric indexes.
 - The rendered chart still resizes to the actual space inside the card.
+- The attempted drill-up smoothing change was tested and rejected, so the chart keeps the normal Highcharts drill animation behavior.
 - This retro is intended to cover the full chart change as one feature-sized handover note.
 - The main base commit this work builds on is `cd83e6d`, which introduced the Highcharts version of the monthly dividend chart.
 
