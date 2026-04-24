@@ -2,7 +2,7 @@ const YahooFinance = require('yahoo-finance2').default;
 const db = require('../db/connection');
 const cache = require('./cache');
 const { getYahooSymbolCandidates } = require('../utils/tickerUtils');
-const { getMergedSplitsByDate } = require('./corporateActionsService');
+const { getManualSplitOverridesByDate } = require('./corporateActionsService');
 const { getHistoricalPricesByInstrument } = require('./historicalPriceService');
 
 const yahooFinance = new YahooFinance({
@@ -139,18 +139,67 @@ function inferYahooCurrency(t212Ticker, yahooTicker) {
 }
 
 function storePrice(priceMap, date, price) {
-  if (!date || !Number.isFinite(price)) {
+  if (!date || !isValidMarketPrice(price)) {
     return;
   }
 
   priceMap.set(date, price);
 }
 
+function parsePositiveNumber(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function parseQuotePrice(quote) {
+  return parsePositiveNumber(quote?.close) ?? parsePositiveNumber(quote?.adjclose);
+}
+
+function isValidMarketPrice(value) {
+  return Number.isFinite(value) && value > 0;
+}
+
 function getChartQuotes(chart) {
   return (chart?.quotes ?? []).filter((quote) => {
-    const price = Number(quote?.adjclose ?? quote?.close);
-    return toDateKey(quote?.date) && Number.isFinite(price);
+    return toDateKey(quote?.date) && parseQuotePrice(quote) !== null;
   });
+}
+
+const dateFormattersByTimeZone = new Map();
+
+function toDateKeyInTimeZone(value, timeZone) {
+  if (!timeZone) {
+    return toDateKey(value);
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  try {
+    if (!dateFormattersByTimeZone.has(timeZone)) {
+      dateFormattersByTimeZone.set(
+        timeZone,
+        new Intl.DateTimeFormat('en-US', {
+          day: '2-digit',
+          month: '2-digit',
+          timeZone,
+          year: 'numeric',
+        })
+      );
+    }
+
+    const parts = dateFormattersByTimeZone.get(timeZone).formatToParts(date);
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return `${values.year}-${values.month}-${values.day}`;
+  } catch (err) {
+    return toDateKey(value);
+  }
 }
 
 async function fetchYahooChart(symbol, startDate, endDate) {
@@ -205,6 +254,10 @@ function buildFillPriceSeriesByTicker(orders) {
   const totalsByTickerAndDate = new Map();
 
   for (const order of orders) {
+    if (order.fill_type === 'STOCK_SPLIT') {
+      continue;
+    }
+
     const date = getOrderDate(order);
     const quantity = Math.abs(getOrderQuantity(order));
     const walletNetValue = Math.abs(Number(order.fill_wallet_net_value ?? 0));
@@ -254,7 +307,7 @@ async function buildPriceSeries(ticker, startDate, endDate, accountCurrency, fal
       const pricesByDate = new Map();
 
       for (const quote of getChartQuotes(chart)) {
-        const price = Number(quote.adjclose ?? quote.close);
+        const price = parseQuotePrice(quote);
         storePrice(pricesByDate, toDateKey(quote.date), price * scale);
       }
 
@@ -316,20 +369,21 @@ async function buildFxSeries(fromCurrency, toCurrency, startDate, endDate) {
   const symbol = `${fromCurrency}${toCurrency}=X`;
   const chart = await fetchYahooChart(symbol, startDate, endDate);
   const pricesByDate = new Map();
+  const exchangeTimeZone = chart?.meta?.exchangeTimezoneName;
 
   for (const quote of getChartQuotes(chart)) {
-    storePrice(pricesByDate, toDateKey(quote.date), Number(quote.adjclose ?? quote.close));
+    storePrice(pricesByDate, toDateKeyInTimeZone(quote.date, exchangeTimeZone), parseQuotePrice(quote));
   }
 
   return pricesByDate;
 }
 
 function getLastKnownValue(series, date, previousValue) {
-  if (series.has(date)) {
+  if (series.has(date) && isValidMarketPrice(series.get(date))) {
     return series.get(date);
   }
 
-  if (Number.isFinite(previousValue)) {
+  if (isValidMarketPrice(previousValue)) {
     return previousValue;
   }
 
@@ -337,7 +391,7 @@ function getLastKnownValue(series, date, previousValue) {
   let lastValue = undefined;
 
   for (const [seriesDate, value] of series.entries()) {
-    if (seriesDate <= date && Number.isFinite(value) && (!lastDate || seriesDate > lastDate)) {
+    if (seriesDate <= date && isValidMarketPrice(value) && (!lastDate || seriesDate > lastDate)) {
       lastDate = seriesDate;
       lastValue = value;
     }
@@ -472,6 +526,45 @@ function buildUnavailableReason({ transactionHistoryIncomplete, holdingsUnreconc
   return `Total return history is unavailable because ${reasons.slice(0, -1).join(', ')} and ${reasons[reasons.length - 1]}.`;
 }
 
+function buildSuspiciousValueDrops(points) {
+  const drops = [];
+
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    const previousValue = Number(previous.totalValue);
+    const currentValue = Number(current.totalValue);
+
+    if (!Number.isFinite(previousValue) || previousValue <= 0 || !Number.isFinite(currentValue)) {
+      continue;
+    }
+
+    const change = currentValue - previousValue;
+    const changePct = (change / previousValue) * 100;
+    const netDepositChange = Number(current.netDeposits) - Number(previous.netDeposits);
+
+    if (
+      changePct < -50
+      && (
+        !Number.isFinite(netDepositChange)
+        || Math.abs(netDepositChange) < Math.abs(change) * 0.5
+      )
+    ) {
+      drops.push({
+        date: current.date,
+        previousDate: previous.date,
+        previousTotalValue: roundMoney(previousValue),
+        totalValue: roundMoney(currentValue),
+        change: roundMoney(change),
+        changePct: Math.round(changePct * 100) / 100,
+        netDepositChange: Number.isFinite(netDepositChange) ? roundMoney(netDepositChange) : null,
+      });
+    }
+  }
+
+  return drops;
+}
+
 function getSyncState(key) {
   const row = db.prepare('SELECT value FROM sync_state WHERE key = ?').get(key);
   return row ? row.value : null;
@@ -492,11 +585,15 @@ function buildExportUnavailableReason(failures) {
 }
 
 function isExportBuyAction(action) {
-  return ['Market buy', 'Limit buy', 'Stock distribution', 'Stock split open'].includes(action);
+  return ['Market buy', 'Limit buy', 'Stock distribution'].includes(action);
 }
 
 function isExportSellAction(action) {
-  return ['Market sell', 'Limit sell', 'Stock split close'].includes(action);
+  return ['Market sell', 'Limit sell'].includes(action);
+}
+
+function isExportSplitAction(action) {
+  return action === 'Stock split open' || action === 'Stock split close';
 }
 
 function isExportDividendAction(action) {
@@ -725,22 +822,66 @@ function getChartSplitsByDate(chart) {
   return splitsByDate;
 }
 
-function mergeSplitMaps(yahooSplits, dbSplits) {
-  // dbSplits already encodes source priority (manual > twelvedata > yahoo).
-  // Where a date appears in both, the DB-cached value wins — so explicit
-  // TwelveData/manual overrides supersede whatever Yahoo's chart returned.
-  const merged = new Map(yahooSplits);
-  for (const [date, factor] of dbSplits.entries()) {
-    merged.set(date, factor);
+function isValidSplitFactor(factor) {
+  return Number.isFinite(factor) && factor > 0 && factor !== 1;
+}
+
+function mergeSplitMaps({ derivedSplits = new Map(), yahooSplits = new Map(), manualSplits = new Map() }) {
+  // Priority is manual override > Yahoo chart split > T212-derived split.
+  const merged = new Map();
+
+  for (const [date, factor] of derivedSplits.entries()) {
+    if (date && isValidSplitFactor(factor)) {
+      merged.set(date, factor);
+    }
+  }
+
+  for (const [date, factor] of yahooSplits.entries()) {
+    if (date && isValidSplitFactor(factor)) {
+      merged.set(date, factor);
+    }
+  }
+
+  for (const [date, factor] of manualSplits.entries()) {
+    if (date && isValidSplitFactor(factor)) {
+      merged.set(date, factor);
+    }
   }
   return merged;
 }
 
-async function buildExportPriceSeries(info, startDate, endDate, accountCurrency, fallbackPricesByDate) {
+function getCumulativeSplitFactorAfterDate(splitsByDate, date) {
+  let factor = 1;
+
+  for (const [splitDate, splitFactor] of splitsByDate?.entries() ?? []) {
+    if (splitDate > date && isValidSplitFactor(splitFactor)) {
+      factor *= splitFactor;
+    }
+  }
+
+  return factor;
+}
+
+function adjustQuantityForPriceBasis(quantity, date, priceSeries) {
+  if (!priceSeries?.pricesAreSplitAdjusted) {
+    return quantity;
+  }
+
+  return quantity * getCumulativeSplitFactorAfterDate(priceSeries.splitsByDate, date);
+}
+
+async function buildExportPriceSeries(
+  info,
+  startDate,
+  endDate,
+  accountCurrency,
+  fallbackPricesByDate,
+  derivedSplitsByDate = new Map()
+) {
   const candidates = getExportYahooCandidates(info);
   const failures = [];
   const t212Ticker = info.t212Ticker || info.rawTicker;
-  const dbSplits = t212Ticker ? getMergedSplitsByDate(t212Ticker) : new Map();
+  const manualSplits = t212Ticker ? getManualSplitOverridesByDate(t212Ticker) : new Map();
 
   for (const yahooTicker of candidates) {
     try {
@@ -751,7 +892,7 @@ async function buildExportPriceSeries(info, startDate, endDate, accountCurrency,
       const pricesByDate = new Map();
 
       for (const quote of getChartQuotes(chart)) {
-        const price = Number(quote.adjclose ?? quote.close);
+        const price = parseQuotePrice(quote);
         storePrice(pricesByDate, toDateKey(quote.date), price * scale);
       }
 
@@ -761,7 +902,12 @@ async function buildExportPriceSeries(info, startDate, endDate, accountCurrency,
         yahooTicker,
         currency,
         pricesByDate,
-        splitsByDate: mergeSplitMaps(getChartSplitsByDate(chart), dbSplits),
+        splitsByDate: mergeSplitMaps({
+          derivedSplits: derivedSplitsByDate,
+          yahooSplits: getChartSplitsByDate(chart),
+          manualSplits,
+        }),
+        pricesAreSplitAdjusted: true,
         fallbackPricesByDate,
         estimatedFromFillsOnly: false,
       };
@@ -785,7 +931,11 @@ async function buildExportPriceSeries(info, startDate, endDate, accountCurrency,
       yahooTicker: null,
       currency: cachedPrices.currency || accountCurrency,
       pricesByDate: cachedPrices.pricesByDate,
-      splitsByDate: dbSplits,
+      splitsByDate: mergeSplitMaps({
+        derivedSplits: derivedSplitsByDate,
+        manualSplits,
+      }),
+      pricesAreSplitAdjusted: false,
       fallbackPricesByDate,
       estimatedFromFillsOnly: false,
       historicalFromCache: true,
@@ -802,7 +952,11 @@ async function buildExportPriceSeries(info, startDate, endDate, accountCurrency,
       yahooTicker: null,
       currency: accountCurrency,
       pricesByDate: new Map(),
-      splitsByDate: dbSplits,
+      splitsByDate: mergeSplitMaps({
+        derivedSplits: derivedSplitsByDate,
+        manualSplits,
+      }),
+      pricesAreSplitAdjusted: false,
       fallbackPricesByDate,
       estimatedFromFillsOnly: true,
       failureMessage: failures.join('; '),
@@ -858,6 +1012,10 @@ function buildExportFillPriceSeries(exportRows, apiOrders, lookup) {
   }
 
   for (const order of apiOrders) {
+    if (order.fill_type === 'STOCK_SPLIT') {
+      continue;
+    }
+
     addFill({
       key: getInstrumentKeyFromParts(order.instrument_isin, order.ticker),
       date: getOrderDate(order),
@@ -882,6 +1040,75 @@ function buildExportFillPriceSeries(exportRows, apiOrders, lookup) {
   return pricesByKey;
 }
 
+function buildDerivedSplitMaps({ exportRows, apiOrders, lookup }) {
+  const pairsByKeyAndDate = new Map();
+
+  function addSplitSide({ key, date, side, quantity }) {
+    const absQuantity = Math.abs(Number(quantity ?? 0));
+
+    if (!key || !date || !side || !Number.isFinite(absQuantity) || absQuantity <= 0) {
+      return;
+    }
+
+    const pairKey = `${key}|${date}`;
+    const existing = pairsByKeyAndDate.get(pairKey) || { key, date, closeQuantity: 0, openQuantity: 0 };
+
+    if (side === 'open') {
+      existing.openQuantity += absQuantity;
+    } else if (side === 'close') {
+      existing.closeQuantity += absQuantity;
+    }
+
+    pairsByKeyAndDate.set(pairKey, existing);
+  }
+
+  for (const row of exportRows) {
+    if (!isExportSplitAction(row.action)) {
+      continue;
+    }
+
+    const info = getExportInstrumentInfo(row, lookup);
+    addSplitSide({
+      key: info?.key,
+      date: toDateKey(row.date_time),
+      side: row.action === 'Stock split open' ? 'open' : 'close',
+      quantity: row.shares,
+    });
+  }
+
+  for (const order of apiOrders) {
+    if (order.fill_type !== 'STOCK_SPLIT') {
+      continue;
+    }
+
+    addSplitSide({
+      key: getInstrumentKeyFromParts(order.instrument_isin, order.ticker),
+      date: getOrderDate(order),
+      side: order.side === 'BUY' ? 'open' : order.side === 'SELL' ? 'close' : null,
+      quantity: order.fill_quantity ?? order.order_filled_quantity,
+    });
+  }
+
+  const splitsByKey = new Map();
+  for (const pair of pairsByKeyAndDate.values()) {
+    if (pair.openQuantity <= 0 || pair.closeQuantity <= 0) {
+      continue;
+    }
+
+    const factor = pair.openQuantity / pair.closeQuantity;
+    if (!isValidSplitFactor(factor)) {
+      continue;
+    }
+
+    if (!splitsByKey.has(pair.key)) {
+      splitsByKey.set(pair.key, new Map());
+    }
+    splitsByKey.get(pair.key).set(pair.date, factor);
+  }
+
+  return splitsByKey;
+}
+
 async function fetchExportMarketData(instrumentsByKey, exportRows, apiOrders, startDate, endDate, accountCurrency, lookup) {
   const pricesByKey = new Map();
   const missingSymbols = [];
@@ -889,6 +1116,7 @@ async function fetchExportMarketData(instrumentsByKey, exportRows, apiOrders, st
   const historicalPriceSymbols = [];
   const currencies = new Set();
   const fallbackPricesByKey = buildExportFillPriceSeries(exportRows, apiOrders, lookup);
+  const derivedSplitsByKey = buildDerivedSplitMaps({ exportRows, apiOrders, lookup });
 
   for (const info of instrumentsByKey.values()) {
     try {
@@ -897,7 +1125,8 @@ async function fetchExportMarketData(instrumentsByKey, exportRows, apiOrders, st
         startDate,
         endDate,
         accountCurrency,
-        fallbackPricesByKey.get(info.key) || new Map()
+        fallbackPricesByKey.get(info.key) || new Map(),
+        derivedSplitsByKey.get(info.key) || new Map()
       );
       pricesByKey.set(info.key, priceSeries);
 
@@ -1147,6 +1376,7 @@ function buildImportedExportEvents({
     const quantity = getOrderQuantity(order);
     const cashAmount = getOrderCashAmount(order);
     const key = getInstrumentKeyFromParts(order.instrument_isin, order.ticker);
+    const isSplitOrder = order.fill_type === 'STOCK_SPLIT';
 
     if (!date || !key || quantity === 0) {
       continue;
@@ -1161,6 +1391,11 @@ function buildImportedExportEvents({
       name: order.instrument_name || order.ticker,
       priceCurrency: order.instrument_currency || null,
     });
+
+    if (isSplitOrder) {
+      continue;
+    }
+
     addEvent(eventsByDate, date, {
       type: 'order',
       key,
@@ -1169,12 +1404,12 @@ function buildImportedExportEvents({
     });
   }
 
+  const startDate = candidateDates.sort()[0] ?? null;
   let netDepositReconciliationAdjustment = 0;
   if (anchor?.date && Number.isFinite(anchor.value)) {
     netDepositReconciliationAdjustment = roundMoney(anchor.value - baseNetDepositsToAnchor);
-    if (Math.abs(netDepositReconciliationAdjustment) > NET_DEPOSITS_TOLERANCE) {
-      recordDate(anchor.date);
-      addEvent(eventsByDate, anchor.date, {
+    if (startDate && Math.abs(netDepositReconciliationAdjustment) > NET_DEPOSITS_TOLERANCE) {
+      addEvent(eventsByDate, startDate, {
         type: 'cash',
         cashAmount: netDepositReconciliationAdjustment,
         netDepositAmount: netDepositReconciliationAdjustment,
@@ -1188,11 +1423,11 @@ function buildImportedExportEvents({
     eventsByDate,
     instrumentsByKey,
     netDepositReconciliationAdjustment,
-    startDate: candidateDates.sort()[0] ?? null,
+    startDate,
   };
 }
 
-function applyImportedEvents(events, state) {
+function applyImportedEvents(date, events, state, marketData) {
   for (const event of events) {
     if (Number.isFinite(event.cashAmount)) {
       state.cash += event.cashAmount;
@@ -1203,13 +1438,19 @@ function applyImportedEvents(events, state) {
     }
 
     if (event.type === 'order' && event.key) {
-      state.holdings.set(event.key, (state.holdings.get(event.key) || 0) + event.quantity);
+      const priceSeries = marketData.pricesByKey.get(event.key);
+      const quantity = adjustQuantityForPriceBasis(event.quantity, date, priceSeries);
+      state.holdings.set(event.key, (state.holdings.get(event.key) || 0) + quantity);
     }
   }
 }
 
 function applySplitEvents(date, state, marketData) {
   for (const [key, priceSeries] of marketData.pricesByKey.entries()) {
+    if (priceSeries.pricesAreSplitAdjusted) {
+      continue;
+    }
+
     const factor = priceSeries.splitsByDate?.get(date);
 
     if (!Number.isFinite(factor) || factor === 0 || factor === 1 || !state.holdings.has(key)) {
@@ -1235,26 +1476,34 @@ function calculateImportedMarketValue(date, state, marketData, accountCurrency) 
       continue;
     }
 
-    if (priceSeries.pricesByDate.has(date)) {
+    if (priceSeries.pricesByDate.has(date) && isValidMarketPrice(priceSeries.pricesByDate.get(date))) {
       state.lastPrices.set(key, priceSeries.pricesByDate.get(date));
     }
 
-    let selectedPrice = state.lastPrices.get(key);
+    let selectedPrice = getLastKnownValue(priceSeries.pricesByDate, date, state.lastPrices.get(key));
+    if (isValidMarketPrice(selectedPrice)) {
+      state.lastPrices.set(key, selectedPrice);
+    }
 
-    if (!Number.isFinite(selectedPrice)) {
-      if (priceSeries.fallbackPricesByDate?.has(date)) {
+    if (!isValidMarketPrice(selectedPrice)) {
+      if (priceSeries.fallbackPricesByDate?.has(date) && isValidMarketPrice(priceSeries.fallbackPricesByDate.get(date))) {
         state.lastFallbackPrices.set(key, priceSeries.fallbackPricesByDate.get(date));
       }
 
-      selectedPrice = state.lastFallbackPrices.get(key);
+      selectedPrice = getLastKnownValue(
+        priceSeries.fallbackPricesByDate || new Map(),
+        date,
+        state.lastFallbackPrices.get(key)
+      );
 
-      if (Number.isFinite(selectedPrice)) {
+      if (isValidMarketPrice(selectedPrice)) {
+        state.lastFallbackPrices.set(key, selectedPrice);
         state.partial = true;
         state.estimatedSymbols.add(priceSeries.ticker || key);
       }
     }
 
-    if (!Number.isFinite(selectedPrice)) {
+    if (!isValidMarketPrice(selectedPrice)) {
       state.partial = true;
       state.missingSymbols.add(priceSeries.ticker || key);
       continue;
@@ -1273,7 +1522,7 @@ function calculateImportedMarketValue(date, state, marketData, accountCurrency) 
       state.lastFxRates.set(fxKey, getLastKnownValue(fxSeries, date, state.lastFxRates.get(fxKey)));
       fxRate = state.lastFxRates.get(fxKey);
 
-      if (!Number.isFinite(fxRate)) {
+      if (!isValidMarketPrice(fxRate)) {
         state.partial = true;
         state.missingSymbols.add(`${priceSeries.currency}${accountCurrency}=X`);
         continue;
@@ -1380,27 +1629,34 @@ function calculateMarketValue(date, state, marketData, accountCurrency) {
       continue;
     }
 
-    if (priceSeries.pricesByDate.has(date)) {
+    if (priceSeries.pricesByDate.has(date) && isValidMarketPrice(priceSeries.pricesByDate.get(date))) {
       state.lastPrices.set(ticker, priceSeries.pricesByDate.get(date));
     }
 
-    const price = state.lastPrices.get(ticker);
-    let selectedPrice = price;
+    let selectedPrice = getLastKnownValue(priceSeries.pricesByDate, date, state.lastPrices.get(ticker));
+    if (isValidMarketPrice(selectedPrice)) {
+      state.lastPrices.set(ticker, selectedPrice);
+    }
 
-    if (!Number.isFinite(selectedPrice)) {
-      if (priceSeries.fallbackPricesByDate?.has(date)) {
+    if (!isValidMarketPrice(selectedPrice)) {
+      if (priceSeries.fallbackPricesByDate?.has(date) && isValidMarketPrice(priceSeries.fallbackPricesByDate.get(date))) {
         state.lastFallbackPrices.set(ticker, priceSeries.fallbackPricesByDate.get(date));
       }
 
-      selectedPrice = state.lastFallbackPrices.get(ticker);
+      selectedPrice = getLastKnownValue(
+        priceSeries.fallbackPricesByDate || new Map(),
+        date,
+        state.lastFallbackPrices.get(ticker)
+      );
 
-      if (Number.isFinite(selectedPrice)) {
+      if (isValidMarketPrice(selectedPrice)) {
+        state.lastFallbackPrices.set(ticker, selectedPrice);
         state.partial = true;
         state.estimatedSymbols.add(ticker);
       }
     }
 
-    if (!Number.isFinite(selectedPrice)) {
+    if (!isValidMarketPrice(selectedPrice)) {
       state.partial = true;
       state.missingSymbols.add(ticker);
       continue;
@@ -1419,7 +1675,7 @@ function calculateMarketValue(date, state, marketData, accountCurrency) {
       state.lastFxRates.set(fxKey, getLastKnownValue(fxSeries, date, state.lastFxRates.get(fxKey)));
       fxRate = state.lastFxRates.get(fxKey);
 
-      if (!Number.isFinite(fxRate)) {
+      if (!isValidMarketPrice(fxRate)) {
         state.partial = true;
         state.missingSymbols.add(`${priceSeries.currency}${accountCurrency}=X`);
         continue;
@@ -1546,7 +1802,7 @@ async function buildImportedTotalReturnHistory({
   let marketValueReconciliationAdjustment = 0;
   for (const date of buildDateRange(startDate, endDate)) {
     applySplitEvents(date, state, marketData);
-    applyImportedEvents(eventsByDate.get(date) ?? [], state);
+    applyImportedEvents(date, eventsByDate.get(date) ?? [], state, marketData);
     const marketValue = calculateImportedMarketValue(date, state, marketData, accountCurrency);
     latestCash = state.cash;
     latestMarketValue = marketValue;
@@ -1659,6 +1915,7 @@ async function buildImportedTotalReturnHistory({
     mismatchedHoldingCount: holdingDiagnostics.mismatchedHoldingCount,
     staleHoldings: holdingDiagnostics.staleHoldings,
     mismatchedHoldings: holdingDiagnostics.mismatchedHoldings,
+    suspiciousValueDrops: skipReconciliation ? buildSuspiciousValueDrops(points) : [],
   };
   const unavailableReason = buildExportUnavailableReason(failures);
 
@@ -1837,6 +2094,7 @@ async function buildTotalReturnHistory({ skipReconciliation = false } = {}) {
     mismatchedHoldings: holdingDiagnostics.mismatchedHoldings,
     transactionCount: transactions.length,
     orderCount: orders.length,
+    suspiciousValueDrops: skipReconciliation ? buildSuspiciousValueDrops(points) : [],
   };
 
   if (!skipReconciliation && unavailableReason) {

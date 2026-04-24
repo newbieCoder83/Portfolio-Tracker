@@ -44,8 +44,8 @@ router.get('/total-return', async (req, res) => {
 /**
  * GET /api/history/total-return-raw
  * Same reconstruction, but skips the 2% reconciliation blocker, the final-point
- * T212 summary anchor, and the Excel-export path. Returns the raw T212-API-only
- * reconstruction even when it disagrees with the account summary.
+ * T212 summary anchor, and related validation blockers. It still uses imported
+ * Trading 212 export rows when they are available.
  */
 router.get('/total-return-raw', async (req, res) => {
   try {

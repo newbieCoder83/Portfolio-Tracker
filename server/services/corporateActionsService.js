@@ -201,8 +201,28 @@ function getMergedSplitsByDate(t212Ticker) {
   return result;
 }
 
+function getManualSplitOverridesByDate(t212Ticker) {
+  const rows = db.prepare(`
+    SELECT action_date, factor FROM corporate_actions
+    WHERE ticker = ? AND action_type = 'SPLIT' AND source = 'manual'
+    ORDER BY action_date ASC
+  `).all(t212Ticker);
+
+  const result = new Map();
+  for (const row of rows) {
+    const factor = Number(row.factor);
+    if (!Number.isFinite(factor) || factor <= 0 || factor === 1) {
+      continue;
+    }
+    result.set(row.action_date, factor);
+  }
+
+  return result;
+}
+
 module.exports = {
   refreshSplitsForTickers,
   getMergedSplitsByDate,
+  getManualSplitOverridesByDate,
   t212ToTwelveDataSymbol,
 };
