@@ -17,6 +17,70 @@ const HOLDING_QUANTITY_TOLERANCE = 0.0001;
 const FACE_VALUE_TOLERANCE = 10;
 const NET_DEPOSITS_TOLERANCE = 0.02;
 const priceWarningKeys = new Set();
+const CORPORATE_ACTION_TYPES = {
+  TRUE_SPLIT: 'true_split',
+  SPIN_OFF_OR_PRICE_ADJUSTMENT: 'spin_off_or_price_adjustment',
+  BROKER_CASH_SETTLED_SPLIT: 'broker_cash_settled_split',
+};
+const KNOWN_CORPORATE_ACTIONS_BY_TICKER = {
+  O_US_EQ: {
+    '2021-11-15': {
+      type: CORPORATE_ACTION_TYPES.SPIN_OFF_OR_PRICE_ADJUSTMENT,
+      reason: 'Realty Income / Orion Office REIT spin-off; parent O share count stays unchanged.',
+    },
+  },
+  O: {
+    '2021-11-15': {
+      type: CORPORATE_ACTION_TYPES.SPIN_OFF_OR_PRICE_ADJUSTMENT,
+      reason: 'Realty Income / Orion Office REIT spin-off; parent O share count stays unchanged.',
+    },
+  },
+  PFE_US_EQ: {
+    '2020-11-17': {
+      type: CORPORATE_ACTION_TYPES.SPIN_OFF_OR_PRICE_ADJUSTMENT,
+      reason: 'Pfizer / Viatris demerger is represented in the Trading 212 export as demerger cash and a same-day Pfizer reinvestment.',
+    },
+  },
+  PFE: {
+    '2020-11-17': {
+      type: CORPORATE_ACTION_TYPES.SPIN_OFF_OR_PRICE_ADJUSTMENT,
+      reason: 'Pfizer / Viatris demerger is represented in the Trading 212 export as demerger cash and a same-day Pfizer reinvestment.',
+    },
+  },
+  AAPL_US_EQ: {
+    '2020-08-31': {
+      type: CORPORATE_ACTION_TYPES.BROKER_CASH_SETTLED_SPLIT,
+      reason: 'Trading 212 export includes AAPL split cash/order rows, so fractional remnants are reconciled from the export instead of Yahoo alone.',
+    },
+  },
+  AAPL: {
+    '2020-08-31': {
+      type: CORPORATE_ACTION_TYPES.BROKER_CASH_SETTLED_SPLIT,
+      reason: 'Trading 212 export includes AAPL split cash/order rows, so fractional remnants are reconciled from the export instead of Yahoo alone.',
+    },
+  },
+  TSLA_US_EQ: {
+    '2020-08-31': {
+      type: CORPORATE_ACTION_TYPES.BROKER_CASH_SETTLED_SPLIT,
+      reason: 'Trading 212 export includes TSLA split cash rows, so fractional remnants are reconciled from the export instead of Yahoo alone.',
+    },
+  },
+  TSLA: {
+    '2020-08-31': {
+      type: CORPORATE_ACTION_TYPES.BROKER_CASH_SETTLED_SPLIT,
+      reason: 'Trading 212 export includes TSLA split cash rows, so fractional remnants are reconciled from the export instead of Yahoo alone.',
+    },
+  },
+};
+const ORION_SPIN_OFF = {
+  parentIsin: 'US7561091049',
+  childIsin: 'US68629Y1038',
+  date: '2021-11-15',
+  firstYahooPriceDate: '2021-11-23',
+  distributionRatio: 10,
+  parentTicker: 'O_US_EQ',
+  childTicker: 'ONL_US_EQ',
+};
 
 function roundMoney(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
@@ -826,6 +890,78 @@ function isValidSplitFactor(factor) {
   return Number.isFinite(factor) && factor > 0 && factor !== 1;
 }
 
+function getCorporateActionTickerAliases(ticker) {
+  const value = String(ticker || '').trim();
+  if (!value) {
+    return [];
+  }
+
+  const aliases = new Set([value]);
+  const withoutExchangeSuffix = value.replace(/_[A-Z]{2}_EQ$/, '');
+  aliases.add(withoutExchangeSuffix);
+
+  return [...aliases].filter(Boolean);
+}
+
+function getCorporateActionClassification(ticker, date) {
+  for (const alias of getCorporateActionTickerAliases(ticker)) {
+    const classification = KNOWN_CORPORATE_ACTIONS_BY_TICKER[alias]?.[date];
+    if (classification) {
+      return classification;
+    }
+  }
+
+  return null;
+}
+
+function getKnownCorporateActionByType(ticker, type) {
+  for (const alias of getCorporateActionTickerAliases(ticker)) {
+    for (const [date, classification] of Object.entries(KNOWN_CORPORATE_ACTIONS_BY_TICKER[alias] || {})) {
+      if (classification.type === type) {
+        return { date, ...classification };
+      }
+    }
+  }
+
+  return null;
+}
+
+function filterQuantitySplitMap(ticker, splitsByDate) {
+  const filtered = new Map();
+  const diagnostics = [];
+
+  for (const [date, factor] of splitsByDate?.entries() ?? []) {
+    const classification = getCorporateActionClassification(ticker, date);
+
+    if (classification?.type === CORPORATE_ACTION_TYPES.SPIN_OFF_OR_PRICE_ADJUSTMENT) {
+      diagnostics.push({
+        ticker,
+        date,
+        factor,
+        type: classification.type,
+        action: 'ignored_for_quantity',
+        reason: classification.reason,
+      });
+      continue;
+    }
+
+    filtered.set(date, factor);
+
+    if (classification?.type === CORPORATE_ACTION_TYPES.BROKER_CASH_SETTLED_SPLIT) {
+      diagnostics.push({
+        ticker,
+        date,
+        factor,
+        type: classification.type,
+        action: 'kept_for_standard_split_quantity',
+        reason: classification.reason,
+      });
+    }
+  }
+
+  return { splitsByDate: filtered, diagnostics };
+}
+
 function mergeSplitMaps({ derivedSplits = new Map(), yahooSplits = new Map(), manualSplits = new Map() }) {
   // Priority is manual override > Yahoo chart split > T212-derived split.
   const merged = new Map();
@@ -896,20 +1032,24 @@ async function buildExportPriceSeries(
         storePrice(pricesByDate, toDateKey(quote.date), price * scale);
       }
 
+      const mergedSplitsByDate = mergeSplitMaps({
+        derivedSplits: derivedSplitsByDate,
+        yahooSplits: getChartSplitsByDate(chart),
+        manualSplits,
+      });
+      const quantitySplits = filterQuantitySplitMap(t212Ticker, mergedSplitsByDate);
+
       return {
         key: info.key,
         ticker: t212Ticker,
         yahooTicker,
         currency,
         pricesByDate,
-        splitsByDate: mergeSplitMaps({
-          derivedSplits: derivedSplitsByDate,
-          yahooSplits: getChartSplitsByDate(chart),
-          manualSplits,
-        }),
+        splitsByDate: quantitySplits.splitsByDate,
         pricesAreSplitAdjusted: true,
         fallbackPricesByDate,
         estimatedFromFillsOnly: false,
+        corporateActionDiagnostics: quantitySplits.diagnostics,
       };
     } catch (err) {
       failures.push(`${yahooTicker}: ${err.message}`);
@@ -925,16 +1065,21 @@ async function buildExportPriceSeries(
   });
 
   if (cachedPrices.pricesByDate.size > 0) {
+    const quantitySplits = filterQuantitySplitMap(
+      t212Ticker,
+      mergeSplitMaps({
+        derivedSplits: derivedSplitsByDate,
+        manualSplits,
+      })
+    );
+
     return {
       key: info.key,
       ticker: t212Ticker,
       yahooTicker: null,
       currency: cachedPrices.currency || accountCurrency,
       pricesByDate: cachedPrices.pricesByDate,
-      splitsByDate: mergeSplitMaps({
-        derivedSplits: derivedSplitsByDate,
-        manualSplits,
-      }),
+      splitsByDate: quantitySplits.splitsByDate,
       pricesAreSplitAdjusted: false,
       fallbackPricesByDate,
       estimatedFromFillsOnly: false,
@@ -942,24 +1087,31 @@ async function buildExportPriceSeries(
       historicalPriceSources: cachedPrices.sources,
       historicalSourceSymbols: cachedPrices.sourceSymbols,
       failureMessage: failures.join('; '),
+      corporateActionDiagnostics: quantitySplits.diagnostics,
     };
   }
 
   if (fallbackPricesByDate && fallbackPricesByDate.size > 0) {
+    const quantitySplits = filterQuantitySplitMap(
+      t212Ticker,
+      mergeSplitMaps({
+        derivedSplits: derivedSplitsByDate,
+        manualSplits,
+      })
+    );
+
     return {
       key: info.key,
       ticker: t212Ticker,
       yahooTicker: null,
       currency: accountCurrency,
       pricesByDate: new Map(),
-      splitsByDate: mergeSplitMaps({
-        derivedSplits: derivedSplitsByDate,
-        manualSplits,
-      }),
+      splitsByDate: quantitySplits.splitsByDate,
       pricesAreSplitAdjusted: false,
       fallbackPricesByDate,
       estimatedFromFillsOnly: true,
       failureMessage: failures.join('; '),
+      corporateActionDiagnostics: quantitySplits.diagnostics,
     };
   }
 
@@ -1114,6 +1266,7 @@ async function fetchExportMarketData(instrumentsByKey, exportRows, apiOrders, st
   const missingSymbols = [];
   const estimatedSymbols = [];
   const historicalPriceSymbols = [];
+  const corporateActionDiagnostics = [];
   const currencies = new Set();
   const fallbackPricesByKey = buildExportFillPriceSeries(exportRows, apiOrders, lookup);
   const derivedSplitsByKey = buildDerivedSplitMaps({ exportRows, apiOrders, lookup });
@@ -1129,6 +1282,7 @@ async function fetchExportMarketData(instrumentsByKey, exportRows, apiOrders, st
         derivedSplitsByKey.get(info.key) || new Map()
       );
       pricesByKey.set(info.key, priceSeries);
+      corporateActionDiagnostics.push(...(priceSeries.corporateActionDiagnostics || []));
 
       if (priceSeries.currency && priceSeries.currency !== accountCurrency) {
         currencies.add(priceSeries.currency);
@@ -1166,6 +1320,7 @@ async function fetchExportMarketData(instrumentsByKey, exportRows, apiOrders, st
   }
 
   return {
+    corporateActionDiagnostics,
     estimatedSymbols,
     fxByCurrency,
     historicalPriceSymbols,
@@ -1269,6 +1424,68 @@ function buildEvents({ transactions, orders, dividends, depositFillRows = [] }) 
   };
 }
 
+function buildOrionSpinOffEvents(exportRows, lookup) {
+  const childRows = exportRows.filter((row) => row.isin === ORION_SPIN_OFF.childIsin);
+  const childTradeRows = childRows.filter((row) => isExportBuyAction(row.action) || isExportSellAction(row.action));
+  const hasOpeningChildTrade = childTradeRows.some((row) => getExportTradeQuantity(row) > 0);
+  const childSoldQuantity = childTradeRows.reduce((sum, row) => {
+    const quantity = getExportTradeQuantity(row);
+    return quantity < 0 ? sum + Math.abs(quantity) : sum;
+  }, 0);
+
+  if (hasOpeningChildTrade || childSoldQuantity <= 0) {
+    return { diagnostics: [], events: [] };
+  }
+
+  const parentQuantity = exportRows.reduce((sum, row) => {
+    const date = toDateKey(row.date_time);
+    if (row.isin !== ORION_SPIN_OFF.parentIsin || !date || date >= ORION_SPIN_OFF.date) {
+      return sum;
+    }
+
+    return sum + getExportTradeQuantity(row);
+  }, 0);
+  const expectedChildQuantity = parentQuantity / ORION_SPIN_OFF.distributionRatio;
+
+  if (
+    !Number.isFinite(expectedChildQuantity)
+    || Math.abs(expectedChildQuantity) <= HOLDING_QUANTITY_TOLERANCE
+    || Math.abs(expectedChildQuantity - childSoldQuantity) > HOLDING_QUANTITY_TOLERANCE
+  ) {
+    return { diagnostics: [], events: [] };
+  }
+
+  const childInfo = getExportInstrumentInfo(childRows[0], lookup);
+  if (!childInfo?.key) {
+    return { diagnostics: [], events: [] };
+  }
+
+  const eventDate = ORION_SPIN_OFF.firstYahooPriceDate;
+  return {
+    diagnostics: [{
+      ticker: childInfo.t212Ticker || childInfo.rawTicker || ORION_SPIN_OFF.childTicker,
+      date: eventDate,
+      distributionDate: ORION_SPIN_OFF.date,
+      quantity: expectedChildQuantity,
+      type: CORPORATE_ACTION_TYPES.SPIN_OFF_OR_PRICE_ADJUSTMENT,
+      action: 'synthetic_stock_distribution',
+      reason: 'Trading 212 export includes the ONL sale but not the opening Orion distribution from Realty Income; the synthetic holding starts on the first usable Yahoo ONL price date.',
+    }],
+    events: [{
+      date: eventDate,
+      info: childInfo,
+      event: {
+        type: 'order',
+        key: childInfo.key,
+        quantity: expectedChildQuantity,
+        cashAmount: 0,
+        quantityAlreadyInPriceBasis: true,
+        corporateAction: true,
+      },
+    }],
+  };
+}
+
 function buildImportedExportEvents({
   exportRows,
   apiOrders,
@@ -1280,6 +1497,7 @@ function buildImportedExportEvents({
   const eventsByDate = new Map();
   const candidateDates = [];
   const instrumentsByKey = new Map();
+  const corporateActionDiagnostics = [];
   let baseNetDepositsToAnchor = 0;
 
   function recordDate(date) {
@@ -1404,6 +1622,14 @@ function buildImportedExportEvents({
     });
   }
 
+  const orionSpinOff = buildOrionSpinOffEvents(exportRows, lookup);
+  corporateActionDiagnostics.push(...orionSpinOff.diagnostics);
+  for (const synthetic of orionSpinOff.events) {
+    recordDate(synthetic.date);
+    addInstrumentInfo(instrumentsByKey, synthetic.info);
+    addEvent(eventsByDate, synthetic.date, synthetic.event);
+  }
+
   const startDate = candidateDates.sort()[0] ?? null;
   let netDepositReconciliationAdjustment = 0;
   if (anchor?.date && Number.isFinite(anchor.value)) {
@@ -1420,6 +1646,7 @@ function buildImportedExportEvents({
 
   return {
     baseNetDepositsToAnchor: roundMoney(baseNetDepositsToAnchor),
+    corporateActionDiagnostics,
     eventsByDate,
     instrumentsByKey,
     netDepositReconciliationAdjustment,
@@ -1439,7 +1666,9 @@ function applyImportedEvents(date, events, state, marketData) {
 
     if (event.type === 'order' && event.key) {
       const priceSeries = marketData.pricesByKey.get(event.key);
-      const quantity = adjustQuantityForPriceBasis(event.quantity, date, priceSeries);
+      const quantity = event.quantityAlreadyInPriceBasis
+        ? event.quantity
+        : adjustQuantityForPriceBasis(event.quantity, date, priceSeries);
       state.holdings.set(event.key, (state.holdings.get(event.key) || 0) + quantity);
     }
   }
@@ -1459,6 +1688,145 @@ function applySplitEvents(date, state, marketData) {
 
     state.holdings.set(key, state.holdings.get(key) * factor);
   }
+}
+
+function buildPositionQuantityLookups(positions) {
+  const byIsin = new Map();
+  const byTicker = new Map();
+
+  for (const position of positions) {
+    const quantity = Number(position.quantity ?? 0);
+
+    if (position.instrument_isin) {
+      byIsin.set(position.instrument_isin, quantity);
+    }
+
+    if (position.ticker) {
+      byTicker.set(position.ticker, quantity);
+    }
+  }
+
+  return { byIsin, byTicker };
+}
+
+function getCurrentQuantityForInstrumentKey(key, priceSeries, instrumentsByKey, positionQuantities) {
+  const info = instrumentsByKey.get(key);
+  const isin = info?.isin || (key.startsWith('isin:') ? key.slice(5) : null);
+  if (isin && positionQuantities.byIsin.has(isin)) {
+    return positionQuantities.byIsin.get(isin);
+  }
+
+  const ticker = priceSeries?.ticker
+    || info?.t212Ticker
+    || info?.rawTicker
+    || (key.startsWith('ticker:') ? key.slice(7) : null);
+  if (ticker && positionQuantities.byTicker.has(ticker)) {
+    return positionQuantities.byTicker.get(ticker);
+  }
+
+  return 0;
+}
+
+function getDisplayTickerForInstrumentKey(key, priceSeries, instrumentsByKey) {
+  const info = instrumentsByKey.get(key);
+  return priceSeries?.ticker
+    || info?.t212Ticker
+    || info?.rawTicker
+    || (key.startsWith('ticker:') ? key.slice(7) : key);
+}
+
+function getLastOrderEventDateByKey(eventsByDate) {
+  const lastDates = new Map();
+
+  for (const [date, events] of eventsByDate.entries()) {
+    for (const event of events) {
+      if (event.type !== 'order' || !event.key) {
+        continue;
+      }
+
+      const current = lastDates.get(event.key);
+      if (!current || date > current) {
+        lastDates.set(event.key, date);
+      }
+    }
+  }
+
+  return lastDates;
+}
+
+function buildClosedPositionQuantityCorrections({
+  endDate,
+  eventsByDate,
+  instrumentsByKey,
+  marketData,
+  positions,
+  startDate,
+}) {
+  const replayState = {
+    cash: 0,
+    holdings: new Map(),
+    netDeposits: 0,
+  };
+
+  for (const date of buildDateRange(startDate, endDate)) {
+    applySplitEvents(date, replayState, marketData);
+    applyImportedEvents(date, eventsByDate.get(date) ?? [], replayState, marketData);
+  }
+
+  const corrections = [];
+  const diagnostics = [];
+  const lastOrderDateByKey = getLastOrderEventDateByKey(eventsByDate);
+  const positionQuantities = buildPositionQuantityLookups(positions);
+
+  for (const [key, reconstructedQuantity] of replayState.holdings.entries()) {
+    if (Math.abs(reconstructedQuantity) <= HOLDING_QUANTITY_TOLERANCE) {
+      continue;
+    }
+
+    const priceSeries = marketData.pricesByKey.get(key);
+    const currentQuantity = getCurrentQuantityForInstrumentKey(
+      key,
+      priceSeries,
+      instrumentsByKey,
+      positionQuantities
+    );
+    if (Math.abs(currentQuantity) > HOLDING_QUANTITY_TOLERANCE) {
+      continue;
+    }
+
+    const ticker = getDisplayTickerForInstrumentKey(key, priceSeries, instrumentsByKey);
+    const brokerSettledAction = getKnownCorporateActionByType(
+      ticker,
+      CORPORATE_ACTION_TYPES.BROKER_CASH_SETTLED_SPLIT
+    );
+    const correctionDate = lastOrderDateByKey.get(key) || endDate;
+    const correctionQuantity = -reconstructedQuantity;
+
+    corrections.push({
+      date: correctionDate,
+      event: {
+        type: 'order',
+        key,
+        quantity: correctionQuantity,
+        cashAmount: 0,
+        quantityAlreadyInPriceBasis: true,
+        corporateAction: true,
+      },
+    });
+    diagnostics.push({
+      ticker,
+      date: correctionDate,
+      quantity: correctionQuantity,
+      reconstructedQtyBeforeCorrection: reconstructedQuantity,
+      currentQty: currentQuantity,
+      type: brokerSettledAction?.type || 'closed_position_quantity_reconciliation',
+      action: 'zero_closed_position_residual',
+      reason: brokerSettledAction?.reason
+        || 'Trading 212 currently reports no holding, so a stale reconstructed residual was removed with a zero-cash quantity correction.',
+    });
+  }
+
+  return { corrections, diagnostics };
 }
 
 function calculateImportedMarketValue(date, state, marketData, accountCurrency) {
@@ -1742,6 +2110,7 @@ async function buildImportedTotalReturnHistory({
 
   const {
     baseNetDepositsToAnchor,
+    corporateActionDiagnostics: eventCorporateActionDiagnostics,
     eventsByDate,
     instrumentsByKey,
     netDepositReconciliationAdjustment,
@@ -1776,6 +2145,23 @@ async function buildImportedTotalReturnHistory({
     accountCurrency,
     lookup
   );
+  const corporateActionDiagnostics = [
+    ...(eventCorporateActionDiagnostics || []),
+    ...(marketData.corporateActionDiagnostics || []),
+  ];
+  const closedPositionCorrections = buildClosedPositionQuantityCorrections({
+    endDate,
+    eventsByDate,
+    instrumentsByKey,
+    marketData,
+    positions,
+    startDate,
+  });
+  corporateActionDiagnostics.push(...closedPositionCorrections.diagnostics);
+  for (const correction of closedPositionCorrections.corrections) {
+    addEvent(eventsByDate, correction.date, correction.event);
+  }
+
   const summaryTotalValue = Number(summary?.total_value);
   const summaryInvestCurrentValue = Number(summary?.invest_current_value);
   const summaryUnrealisedPl = Number(summary?.invest_unrealized_pl);
@@ -1889,6 +2275,7 @@ async function buildImportedTotalReturnHistory({
     currentPositionsValue: roundMoney(currentPositionsValue),
     currentSummaryValue: Number.isFinite(summaryTotalValue) ? roundMoney(summaryTotalValue) : null,
     deltaPercent: deltaPercent === null ? null : Math.round(deltaPercent * 100) / 100,
+    corporateActionDiagnostics,
     exportEarliestDate: toDateKey(exportEarliestDateTime),
     exportLatestDate: toDateKey(exportLatestDateTime),
     exportRowCount: exportRows.length,
