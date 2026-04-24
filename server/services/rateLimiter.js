@@ -7,6 +7,7 @@
  *   positions:   1 req / 1s
  *   dividends:   6 req / 60s
  *   orders:      6 req / 60s
+ *   transactions: 6 req / 60s
  *   instruments:  1 req / 50s
  */
 
@@ -15,6 +16,7 @@ const BUCKET_CONFIG = {
   positions:   { maxTokens: 1, refillIntervalMs: 1000 },
   dividends:   { maxTokens: 6, refillIntervalMs: 10000 },  // 1 token per 10s, max 6
   orders:      { maxTokens: 6, refillIntervalMs: 10000 },
+  transactions: { maxTokens: 6, refillIntervalMs: 10000 },
   instruments: { maxTokens: 1, refillIntervalMs: 50000 },
 };
 

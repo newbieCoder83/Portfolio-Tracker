@@ -4,6 +4,7 @@ import { Box, CircularProgress } from '@mui/material';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import HeatmapPage from './pages/HeatmapPage';
+import RawTotalReturnPage from './pages/RawTotalReturnPage';
 
 function ProtectedRoute({ children }) {
   const { isAuthenticated, loading } = useAuth();
@@ -37,6 +38,14 @@ function AppContent() {
         element={
           <ProtectedRoute>
             <HeatmapPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/total-return"
+        element={
+          <ProtectedRoute>
+            <RawTotalReturnPage />
           </ProtectedRoute>
         }
       />

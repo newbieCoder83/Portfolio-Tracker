@@ -4,53 +4,9 @@ const YahooFinance = require('yahoo-finance2').default;
 const yahooFinance = new YahooFinance();
 const cache = require('../services/cache');
 const db = require('../db/connection');
+const { normaliseToYahoo } = require('../utils/tickerUtils');
 
-// Convert T212 ticker format to Yahoo Finance format.
-// Always use the original T212 ticker in responses — only use the converted
-// ticker when calling yahooFinance.quoteSummary().
-function normaliseToYahoo(t212Ticker) {
-  // Remove trailing _EQ or _US_EQ first
-  let ticker = t212Ticker
-    .replace(/_US_EQ$/, '')
-    .replace(/_EQ$/, '');
-
-  // T212 uses lowercase 'l' at end of ticker to denote LSE listing
-  // e.g. BGEOl → BGEO.L, VMIDl → VMID.L
-  if (ticker.endsWith('l') && ticker === ticker.toUpperCase().slice(0,-1) + 'l') {
-    return ticker.slice(0, -1) + '.L';
-  }
-
-  // Named exchange suffixes (uppercase tickers with exchange code)
-  const suffixMap = {
-    '_LON': '.L',
-    '_EAM': '.AS',
-    '_EPA': '.PA',
-    '_ETR': '.DE',
-    '_BME': '.MC',
-    '_BIT': '.MI',
-    '_HEL': '.HE',
-    '_WSE': '.WA',
-    '_ATH': '.AT',
-    '_OMX': '.ST',
-    '_CPH': '.CO',
-    '_OSL': '.OL',
-    '_ISE': '.IR',
-    '_TSX': '.TO',
-    '_ASX': '.AX',
-    '_SGX': '.SI',
-    '_HKE': '.HK',
-  };
-
-  for (const [t212Suffix, yahooSuffix] of Object.entries(suffixMap)) {
-    if (t212Ticker.includes(t212Suffix)) {
-      return t212Ticker.split(t212Suffix)[0] + yahooSuffix;
-    }
-  }
-
-  return ticker; // US and others
-}
-
-let lastGoodResult = null; // stale fallback — survives cache expiry
+let lastGoodResult = null; // stale fallback, survives cache expiry
 
 router.get('/', async (req, res) => {
   try {
@@ -76,7 +32,7 @@ router.get('/', async (req, res) => {
     const enriched = await Promise.all(positions.map(async (pos) => {
       try {
         const yahooTicker = normaliseToYahoo(pos.ticker);
-        console.log(`[Heatmap] ${pos.ticker} → ${yahooTicker}`);
+        console.log(`[Heatmap] ${pos.ticker} -> ${yahooTicker}`);
         const quote = await yahooFinance.quoteSummary(yahooTicker, {
           modules: ['price', 'assetProfile'],
         });
@@ -121,7 +77,7 @@ router.get('/', async (req, res) => {
             const pctChange = prevClose > 0
               ? ((currentPrice - prevClose) / prevClose) * 100
               : 0;
-            console.log(`[Heatmap] Fallback search matched ${pos.ticker} → ${match.symbol}`);
+            console.log(`[Heatmap] Fallback search matched ${pos.ticker} -> ${match.symbol}`);
             return {
               ticker: pos.ticker,
               name: price.shortName || price.longName || pos.instrument_name || pos.ticker,
@@ -137,7 +93,7 @@ router.get('/', async (req, res) => {
           console.warn(`[Heatmap] Fallback search also failed for ${pos.ticker}:`, searchErr.message);
         }
 
-        // Both direct fetch and search failed — return neutral placeholder
+        // Both direct fetch and search failed, so return a neutral placeholder.
         return {
           ticker: pos.ticker,
           name: pos.instrument_name || pos.ticker,
@@ -151,7 +107,7 @@ router.get('/', async (req, res) => {
       }
     }));
 
-    // 4. Group by sector → industry, sorted by total value descending
+    // 4. Group by sector -> industry, sorted by total value descending
     const sectorMap = {};
     for (const stock of enriched) {
       const industryName = stock.industry === 'Unknown' ? stock.sector : stock.industry;
@@ -171,12 +127,12 @@ router.get('/', async (req, res) => {
 
     const sectors = Object.values(sectorMap)
       .sort((a, b) => b.totalValue - a.totalValue)
-      .map(sector => ({
+      .map((sector) => ({
         name: sector.name,
         totalValue: sector.totalValue,
         industries: Object.values(sector.industries)
           .sort((a, b) => b.totalValue - a.totalValue)
-          .map(ind => ({
+          .map((ind) => ({
             ...ind,
             stocks: ind.stocks.sort((a, b) => b.marketValue - a.marketValue),
           })),
@@ -186,9 +142,8 @@ router.get('/', async (req, res) => {
     cache.set('heatmap', result, 100_000); // 100-second TTL
     lastGoodResult = result;
     return res.json(result);
-
   } catch (err) {
-    // Outer error (e.g. 429 rate limit, network failure) — serve stale data if available
+    // Outer error (e.g. 429 rate limit, network failure): serve stale data if available.
     console.error('[Heatmap] Outer error:', err.message);
     if (lastGoodResult) {
       return res.json({ ...lastGoodResult, stale: true });

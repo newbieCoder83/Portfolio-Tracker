@@ -32,6 +32,10 @@ npm run build    # Build client for production (outputs to client/dist)
 npm start        # Start production server on :3000
 ```
 
+## Environment variables
+- `PORT` — dev server port (defaults to 3001)
+- `TWELVEDATA_API_KEY` — optional. Free key from https://twelvedata.com/register. Used by the **Refresh historical prices** button on `/total-return` to try backfilling daily prices when Yahoo has no data for old or delisted holdings. Some delisted symbols are not available on TwelveData Basic, so manual CSV import through `server/scripts/importHistoricalPrices.js` is the reliable fallback. Set inline (`TWELVEDATA_API_KEY=xxx npm run dev`) or export from your shell.
+
 ## Project Structure
 ```
 server/

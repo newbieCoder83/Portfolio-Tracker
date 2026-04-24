@@ -7,7 +7,7 @@ const T212Client = require('./t212Client');
  */
 async function fullSync(apiKey, apiSecret, environment) {
   const client = new T212Client(apiKey, apiSecret, environment);
-  const counts = { positions: 0, dividends: 0, orders: 0, instruments: 0 };
+  const counts = { positions: 0, dividends: 0, orders: 0, transactions: 0, instruments: 0 };
 
   // 1. Fetch and store account summary
   console.log('[Sync] Fetching account summary...');
@@ -38,16 +38,20 @@ async function fullSync(apiKey, apiSecret, environment) {
   upsertOrders(orders);
   counts.orders = orders.length;
 
-  // 5. Fetch instruments metadata
+  // 5. Fetch all cash transactions (paginated)
+  console.log('[Sync] Fetching all transactions...');
+  counts.transactions = await fetchAllTransactions(client);
+
+  // 6. Fetch instruments metadata
   console.log('[Sync] Fetching instruments...');
   const instruments = await client.get('/api/v0/equity/metadata/instruments', 'instruments');
   upsertInstruments(instruments);
   counts.instruments = instruments.length;
 
-  // 6. Create daily snapshot
+  // 7. Create daily snapshot
   createDailySnapshot(summary);
 
-  // 7. Update sync state
+  // 8. Update sync state
   setSyncState('last_full_sync', new Date().toISOString());
   setSyncState('last_sync', new Date().toISOString());
   setSyncState('instruments_last_sync', new Date().toISOString());
@@ -61,7 +65,7 @@ async function fullSync(apiKey, apiSecret, environment) {
  */
 async function incrementalSync(apiKey, apiSecret, environment) {
   const client = new T212Client(apiKey, apiSecret, environment);
-  const counts = { positions: 0, dividends: 0, orders: 0, instruments: 0 };
+  const counts = { positions: 0, dividends: 0, orders: 0, transactions: 0, instruments: 0 };
 
   // 1. Always refresh account summary
   console.log('[Sync] Refreshing account summary...');
@@ -84,7 +88,11 @@ async function incrementalSync(apiKey, apiSecret, environment) {
   const newOrders = await fetchNewOrders(client);
   counts.orders = newOrders;
 
-  // 5. Refresh instruments if stale (>24 hours)
+  // 5. Fetch only new transactions
+  console.log('[Sync] Fetching new transactions...');
+  counts.transactions = await fetchNewTransactions(client);
+
+  // 6. Refresh instruments if stale (>24 hours)
   const instrumentsLastSync = getSyncState('instruments_last_sync');
   const staleThreshold = 24 * 60 * 60 * 1000; // 24 hours
   if (!instrumentsLastSync || (Date.now() - new Date(instrumentsLastSync).getTime()) > staleThreshold) {
@@ -95,10 +103,10 @@ async function incrementalSync(apiKey, apiSecret, environment) {
     setSyncState('instruments_last_sync', new Date().toISOString());
   }
 
-  // 6. Create daily snapshot
+  // 7. Create daily snapshot
   createDailySnapshot(summary);
 
-  // 7. Update sync state
+  // 8. Update sync state
   setSyncState('last_sync', new Date().toISOString());
 
   console.log('[Sync] Incremental sync complete:', counts);
@@ -259,6 +267,32 @@ function upsertOrders(orders) {
   transaction(orders);
 }
 
+function upsertTransactions(transactions) {
+  const stmt = db.prepare(`
+    INSERT OR IGNORE INTO transactions
+      (reference, amount, currency, date_time, type)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+
+  const transaction = db.transaction((items) => {
+    for (const item of items) {
+      if (!item.reference) {
+        continue;
+      }
+
+      stmt.run(
+        item.reference,
+        item.amount,
+        item.currency,
+        item.dateTime,
+        item.type
+      );
+    }
+  });
+
+  transaction(transactions);
+}
+
 function upsertInstruments(instruments) {
   const stmt = db.prepare(`
     INSERT OR REPLACE INTO instruments
@@ -384,6 +418,71 @@ async function fetchNewOrders(client) {
   }
 
   return newCount;
+}
+
+function isMissingTransactionsScopeError(err) {
+  return err && err.response && err.response.status === 403;
+}
+
+async function fetchAllTransactions(client) {
+  try {
+    const transactions = await client.paginateAll(
+      '/api/v0/equity/history/transactions?limit=50',
+      'transactions'
+    );
+    upsertTransactions(transactions);
+    setSyncState('transactions_sync_unavailable', 'false');
+    return transactions.length;
+  } catch (err) {
+    if (isMissingTransactionsScopeError(err)) {
+      console.warn('[Sync] Skipping transactions: API key is missing history:transactions scope');
+      setSyncState('transactions_sync_unavailable', 'true');
+      return 0;
+    }
+
+    throw err;
+  }
+}
+
+async function fetchNewTransactions(client) {
+  let newCount = 0;
+  let currentPath = '/api/v0/equity/history/transactions?limit=50';
+
+  try {
+    while (currentPath) {
+      const data = await client.get(currentPath, 'transactions', false);
+      if (!data.items || data.items.length === 0) break;
+
+      const newItems = data.items.filter((item) => {
+        const exists = db.prepare('SELECT 1 FROM transactions WHERE reference = ?').get(item.reference);
+        return !exists;
+      });
+
+      if (newItems.length > 0) {
+        upsertTransactions(newItems);
+        newCount += newItems.length;
+      }
+
+      if (newItems.length === 0) break;
+
+      if (data.nextPagePath && !data.nextPagePath.includes('null')) {
+        currentPath = data.nextPagePath;
+      } else {
+        currentPath = null;
+      }
+    }
+
+    setSyncState('transactions_sync_unavailable', 'false');
+    return newCount;
+  } catch (err) {
+    if (isMissingTransactionsScopeError(err)) {
+      console.warn('[Sync] Skipping transactions: API key is missing history:transactions scope');
+      setSyncState('transactions_sync_unavailable', 'true');
+      return 0;
+    }
+
+    throw err;
+  }
 }
 
 // --- Sync state helpers ---

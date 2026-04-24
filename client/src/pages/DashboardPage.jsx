@@ -18,17 +18,19 @@ export default function DashboardPage() {
     dividends: [],
     orders: [],
     snapshots: [],
+    totalReturn: null,
   });
   const [loading, setLoading] = useState(true);
 
   const fetchAll = useCallback(async () => {
     try {
-      const [summaryRes, positionsRes, dividendsRes, ordersRes, snapshotsRes] = await Promise.all([
+      const [summaryRes, positionsRes, dividendsRes, ordersRes, snapshotsRes, totalReturnRes] = await Promise.all([
         api.get('/api/account/summary'),
         api.get('/api/portfolio/positions'),
         api.get('/api/history/dividends'),
         api.get('/api/history/orders'),
         api.get('/api/sync/snapshots'),
+        api.get('/api/history/total-return'),
       ]);
       setData({
         summary: summaryRes.data,
@@ -36,6 +38,7 @@ export default function DashboardPage() {
         dividends: dividendsRes.data || [],
         orders: ordersRes.data || [],
         snapshots: snapshotsRes.data || [],
+        totalReturn: totalReturnRes.data || null,
       });
     } catch (err) {
       console.error('Failed to fetch dashboard data:', err);
@@ -70,7 +73,7 @@ export default function DashboardPage() {
           <AllocationPieChart positions={data.positions} />
         </Grid>
         <Grid item xs={12} md={7}>
-          <PortfolioValueChart snapshots={data.snapshots} />
+          <PortfolioValueChart totalReturn={data.totalReturn} />
         </Grid>
       </Grid>
 

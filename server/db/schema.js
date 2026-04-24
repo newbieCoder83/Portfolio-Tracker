@@ -112,6 +112,50 @@ function initializeSchema() {
       fill_wallet_realised_pl REAL
     );
 
+    CREATE TABLE IF NOT EXISTS transactions (
+      reference TEXT PRIMARY KEY,
+      amount REAL,
+      currency TEXT,
+      date_time TEXT,
+      type TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS t212_export_rows (
+      unique_key TEXT PRIMARY KEY,
+      row_index INTEGER,
+      action TEXT,
+      date_time TEXT,
+      isin TEXT,
+      ticker TEXT,
+      name TEXT,
+      notes TEXT,
+      export_id TEXT,
+      shares REAL,
+      price REAL,
+      price_currency TEXT,
+      exchange_rate REAL,
+      result REAL,
+      result_currency TEXT,
+      total REAL,
+      total_currency TEXT,
+      withholding_tax REAL,
+      withholding_tax_currency TEXT,
+      stamp_duty_reserve_tax REAL,
+      stamp_duty_reserve_tax_currency TEXT,
+      currency_conversion_fee REAL,
+      currency_conversion_fee_currency TEXT,
+      finra_fee REAL,
+      finra_fee_currency TEXT,
+      french_transaction_tax REAL,
+      french_transaction_tax_currency TEXT,
+      transaction_fee REAL,
+      transaction_fee_currency TEXT,
+      record_date TEXT,
+      total_ccy REAL,
+      source_file TEXT,
+      imported_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS snapshots (
       date TEXT PRIMARY KEY,
       total_value REAL,
@@ -124,6 +168,36 @@ function initializeSchema() {
       key TEXT PRIMARY KEY,
       value TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS corporate_actions (
+      ticker TEXT NOT NULL,
+      action_date TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      factor REAL NOT NULL,
+      source TEXT NOT NULL,
+      fetched_at TEXT NOT NULL,
+      PRIMARY KEY (ticker, action_date, source)
+    );
+    CREATE INDEX IF NOT EXISTS idx_corporate_actions_ticker ON corporate_actions(ticker);
+
+    CREATE TABLE IF NOT EXISTS historical_prices (
+      instrument_key TEXT NOT NULL,
+      ticker TEXT,
+      isin TEXT,
+      bar_date TEXT NOT NULL,
+      close REAL NOT NULL,
+      currency TEXT,
+      source TEXT NOT NULL,
+      source_symbol TEXT,
+      fetched_at TEXT NOT NULL,
+      PRIMARY KEY (instrument_key, bar_date, source)
+    );
+    CREATE INDEX IF NOT EXISTS idx_historical_prices_lookup
+      ON historical_prices(instrument_key, bar_date);
+    CREATE INDEX IF NOT EXISTS idx_historical_prices_ticker
+      ON historical_prices(ticker, bar_date);
+    CREATE INDEX IF NOT EXISTS idx_historical_prices_isin
+      ON historical_prices(isin, bar_date);
   `);
 }
 
