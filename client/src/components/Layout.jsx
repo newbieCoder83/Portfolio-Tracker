@@ -123,7 +123,6 @@ export default function Layout({ children, onSyncComplete }) {
           >
             <Tab label="Dashboard" value="dashboard" />
             <Tab label="Heatmap" value="heatmap" />
-            <Tab label="Total Return" value="total-return" />
           </Tabs>
         </Toolbar>
       </AppBar>

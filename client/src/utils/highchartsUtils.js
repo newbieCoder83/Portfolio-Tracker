@@ -110,3 +110,68 @@ export function dividendAmountCellFormatter() {
     maximumFractionDigits: 4,
   }).format(value);
 }
+
+function formatDividendNumber(value) {
+  return new Intl.NumberFormat('en-GB', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  }).format(value);
+}
+
+function isPenceCurrency(currency) {
+  const text = String(currency || '').trim();
+  const upper = text.toUpperCase();
+  return text === 'GBp' || ['GBX', 'GBPENCE', 'GBP.P'].includes(upper);
+}
+
+export function dividendTotalCurrencyCellFormatter() {
+  if (this.value === null || this.value === undefined) {
+    return '-';
+  }
+
+  const value = Number(this.value);
+  if (!Number.isFinite(value)) {
+    return '-';
+  }
+
+  return new Intl.NumberFormat('en-GB', {
+    style: 'currency',
+    currency: 'GBP',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+export function dividendPerShareCurrencyCellFormatter() {
+  if (this.value === null || this.value === undefined) {
+    return '-';
+  }
+
+  const value = Number(this.value);
+  if (!Number.isFinite(value)) {
+    return '-';
+  }
+
+  const currency = String(this.row?.data?.per_share_currency || '').trim();
+  if (!currency) {
+    return formatDividendNumber(value);
+  }
+
+  if (isPenceCurrency(currency)) {
+    return `${formatDividendNumber(value)}p`;
+  }
+
+  const currencyCode = currency.toUpperCase();
+  const locale = currencyCode === 'USD' ? 'en-US' : 'en-GB';
+
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: 'currency',
+      currency: currencyCode,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 4,
+    }).format(value);
+  } catch {
+    return formatDividendNumber(value);
+  }
+}
