@@ -59,6 +59,18 @@ const KNOWN_CORPORATE_ACTIONS_BY_TICKER = {
       reason: 'Trading 212 export includes AAPL split cash/order rows, so fractional remnants are reconciled from the export instead of Yahoo alone.',
     },
   },
+  HON_US_EQ: {
+    '2025-10-30': {
+      type: CORPORATE_ACTION_TYPES.SPIN_OFF_OR_PRICE_ADJUSTMENT,
+      reason: 'Honeywell / Solstice Advanced Materials (SOLS) spin-off; HON share count unchanged. SOLS distribution is already represented in the Trading 212 export.',
+    },
+  },
+  HON: {
+    '2025-10-30': {
+      type: CORPORATE_ACTION_TYPES.SPIN_OFF_OR_PRICE_ADJUSTMENT,
+      reason: 'Honeywell / Solstice Advanced Materials (SOLS) spin-off; HON share count unchanged. SOLS distribution is already represented in the Trading 212 export.',
+    },
+  },
   TSLA_US_EQ: {
     '2020-08-31': {
       type: CORPORATE_ACTION_TYPES.BROKER_CASH_SETTLED_SPLIT,
@@ -1032,9 +1044,33 @@ async function buildExportPriceSeries(
         storePrice(pricesByDate, toDateKey(quote.date), price * scale);
       }
 
+      const yahooSplits = getChartSplitsByDate(chart);
+      // Yahoo back-adjusts pre-split-date close prices by 1/factor for every
+      // event in events.splits, including spin-offs. For spin-offs the parent
+      // share count does not change (it is classified as
+      // SPIN_OFF_OR_PRICE_ADJUSTMENT and skipped for quantity back-conversion),
+      // so the back-adjustment of historical prices would leave pre-event
+      // values understated by the spin-off factor. Undo that adjustment for
+      // those classifications only — ordinary splits keep Yahoo's adjustment
+      // because their quantity back-conversion compensates.
+      for (const [splitDate, factor] of yahooSplits.entries()) {
+        if (!splitDate || !isValidSplitFactor(factor)) {
+          continue;
+        }
+        const classification = getCorporateActionClassification(t212Ticker, splitDate);
+        if (classification?.type !== CORPORATE_ACTION_TYPES.SPIN_OFF_OR_PRICE_ADJUSTMENT) {
+          continue;
+        }
+        for (const [date, price] of pricesByDate.entries()) {
+          if (date < splitDate) {
+            pricesByDate.set(date, price * factor);
+          }
+        }
+      }
+
       const mergedSplitsByDate = mergeSplitMaps({
         derivedSplits: derivedSplitsByDate,
-        yahooSplits: getChartSplitsByDate(chart),
+        yahooSplits,
         manualSplits,
       });
       const quantitySplits = filterQuantitySplitMap(t212Ticker, mergedSplitsByDate);
@@ -1829,7 +1865,7 @@ function buildClosedPositionQuantityCorrections({
   return { corrections, diagnostics };
 }
 
-function calculateImportedMarketValue(date, state, marketData, accountCurrency) {
+function calculateImportedMarketValue(date, state, marketData, accountCurrency, contributionCollector = null) {
   let marketValue = 0;
 
   for (const [key, quantity] of state.holdings.entries()) {
@@ -1841,6 +1877,19 @@ function calculateImportedMarketValue(date, state, marketData, accountCurrency) 
     if (!priceSeries) {
       state.partial = true;
       state.missingSymbols.add(key);
+      if (contributionCollector) {
+        contributionCollector.push({
+          key,
+          ticker: key,
+          currency: null,
+          quantity,
+          selectedPrice: null,
+          priceSource: 'missing',
+          fxRate: null,
+          gbpValue: null,
+          flags: { reason: 'no_price_series' },
+        });
+      }
       continue;
     }
 
@@ -1849,8 +1898,10 @@ function calculateImportedMarketValue(date, state, marketData, accountCurrency) 
     }
 
     let selectedPrice = getLastKnownValue(priceSeries.pricesByDate, date, state.lastPrices.get(key));
+    let priceSource = null;
     if (isValidMarketPrice(selectedPrice)) {
       state.lastPrices.set(key, selectedPrice);
+      priceSource = priceSeries.historicalFromCache ? 'cached' : 'yahoo';
     }
 
     if (!isValidMarketPrice(selectedPrice)) {
@@ -1868,12 +1919,31 @@ function calculateImportedMarketValue(date, state, marketData, accountCurrency) 
         state.lastFallbackPrices.set(key, selectedPrice);
         state.partial = true;
         state.estimatedSymbols.add(priceSeries.ticker || key);
+        priceSource = 'fillFallback';
       }
     }
 
     if (!isValidMarketPrice(selectedPrice)) {
       state.partial = true;
       state.missingSymbols.add(priceSeries.ticker || key);
+      if (contributionCollector) {
+        contributionCollector.push({
+          key,
+          ticker: priceSeries.ticker || key,
+          currency: priceSeries.currency || null,
+          quantity,
+          selectedPrice: null,
+          priceSource: 'missing',
+          fxRate: null,
+          gbpValue: null,
+          flags: {
+            pricesAreSplitAdjusted: !!priceSeries.pricesAreSplitAdjusted,
+            historicalFromCache: !!priceSeries.historicalFromCache,
+            estimatedFromFillsOnly: !!priceSeries.estimatedFromFillsOnly,
+            reason: 'no_valid_price',
+          },
+        });
+      }
       continue;
     }
 
@@ -1883,6 +1953,24 @@ function calculateImportedMarketValue(date, state, marketData, accountCurrency) 
       if (!fxSeries) {
         state.partial = true;
         state.missingSymbols.add(`${priceSeries.currency}${accountCurrency}=X`);
+        if (contributionCollector) {
+          contributionCollector.push({
+            key,
+            ticker: priceSeries.ticker || key,
+            currency: priceSeries.currency,
+            quantity,
+            selectedPrice,
+            priceSource,
+            fxRate: null,
+            gbpValue: null,
+            flags: {
+              pricesAreSplitAdjusted: !!priceSeries.pricesAreSplitAdjusted,
+              historicalFromCache: !!priceSeries.historicalFromCache,
+              estimatedFromFillsOnly: !!priceSeries.estimatedFromFillsOnly,
+              reason: 'no_fx_series',
+            },
+          });
+        }
         continue;
       }
 
@@ -1893,11 +1981,48 @@ function calculateImportedMarketValue(date, state, marketData, accountCurrency) 
       if (!isValidMarketPrice(fxRate)) {
         state.partial = true;
         state.missingSymbols.add(`${priceSeries.currency}${accountCurrency}=X`);
+        if (contributionCollector) {
+          contributionCollector.push({
+            key,
+            ticker: priceSeries.ticker || key,
+            currency: priceSeries.currency,
+            quantity,
+            selectedPrice,
+            priceSource,
+            fxRate: null,
+            gbpValue: null,
+            flags: {
+              pricesAreSplitAdjusted: !!priceSeries.pricesAreSplitAdjusted,
+              historicalFromCache: !!priceSeries.historicalFromCache,
+              estimatedFromFillsOnly: !!priceSeries.estimatedFromFillsOnly,
+              reason: 'no_valid_fx',
+            },
+          });
+        }
         continue;
       }
     }
 
-    marketValue += quantity * selectedPrice * fxRate;
+    const gbpValue = quantity * selectedPrice * fxRate;
+    marketValue += gbpValue;
+
+    if (contributionCollector) {
+      contributionCollector.push({
+        key,
+        ticker: priceSeries.ticker || key,
+        currency: priceSeries.currency || accountCurrency,
+        quantity,
+        selectedPrice,
+        priceSource,
+        fxRate,
+        gbpValue,
+        flags: {
+          pricesAreSplitAdjusted: !!priceSeries.pricesAreSplitAdjusted,
+          historicalFromCache: !!priceSeries.historicalFromCache,
+          estimatedFromFillsOnly: !!priceSeries.estimatedFromFillsOnly,
+        },
+      });
+    }
   }
 
   return marketValue;
@@ -2065,8 +2190,13 @@ async function buildImportedTotalReturnHistory({
   positions,
   skipReconciliation = false,
   summary,
+  traceDates = null,
   transactions,
 }) {
+  const traceDateSet = traceDates && traceDates.size !== undefined
+    ? traceDates
+    : (Array.isArray(traceDates) ? new Set(traceDates) : null);
+  const traceByDate = traceDateSet ? new Map() : null;
   const exportEarliestDateTime = getSyncState('t212_export_earliest_date_time')
     || exportRows[0]?.date_time
     || null;
@@ -2187,15 +2317,37 @@ async function buildImportedTotalReturnHistory({
   let latestRawTotalValue = 0;
   let marketValueReconciliationAdjustment = 0;
   for (const date of buildDateRange(startDate, endDate)) {
+    const traceThisDate = traceDateSet?.has(date) ?? false;
     applySplitEvents(date, state, marketData);
     applyImportedEvents(date, eventsByDate.get(date) ?? [], state, marketData);
-    const marketValue = calculateImportedMarketValue(date, state, marketData, accountCurrency);
+    const contributionCollector = traceThisDate ? [] : null;
+    const marketValue = calculateImportedMarketValue(date, state, marketData, accountCurrency, contributionCollector);
     latestCash = state.cash;
     latestMarketValue = marketValue;
     const rawTotalValue = state.cash + marketValue;
     latestRawTotalValue = rawTotalValue;
     const returnValue = rawTotalValue - state.netDeposits;
     const returnPct = state.netDeposits > 0 ? (returnValue / state.netDeposits) * 100 : null;
+
+    if (traceThisDate && traceByDate) {
+      traceByDate.set(date, {
+        date,
+        cash: roundMoney(state.cash),
+        marketValue: roundMoney(marketValue),
+        netDeposits: roundMoney(state.netDeposits),
+        totalValue: roundMoney(rawTotalValue),
+        events: (eventsByDate.get(date) ?? []).map((event) => ({
+          type: event.type,
+          key: event.key ?? null,
+          quantity: Number.isFinite(event.quantity) ? event.quantity : null,
+          cashAmount: Number.isFinite(event.cashAmount) ? event.cashAmount : null,
+          netDepositAmount: Number.isFinite(event.netDepositAmount) ? event.netDepositAmount : null,
+          reconciliation: event.reconciliation || false,
+          quantityAlreadyInPriceBasis: event.quantityAlreadyInPriceBasis || false,
+        })),
+        contributions: contributionCollector,
+      });
+    }
 
     points.push({
       date,
@@ -2304,6 +2456,34 @@ async function buildImportedTotalReturnHistory({
     mismatchedHoldings: holdingDiagnostics.mismatchedHoldings,
     suspiciousValueDrops: skipReconciliation ? buildSuspiciousValueDrops(points) : [],
   };
+
+  if (traceDateSet) {
+    const priceSeriesSummary = {};
+    for (const [seriesKey, priceSeries] of marketData.pricesByKey.entries()) {
+      const info = instrumentsByKey.get(seriesKey);
+      const splits = [];
+      for (const [splitDate, factor] of (priceSeries.splitsByDate ?? new Map()).entries()) {
+        splits.push({ date: splitDate, factor });
+      }
+      splits.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+      priceSeriesSummary[seriesKey] = {
+        ticker: priceSeries.ticker || info?.t212Ticker || info?.rawTicker || null,
+        yahooTicker: priceSeries.yahooTicker ?? null,
+        currency: priceSeries.currency ?? null,
+        pricesAreSplitAdjusted: !!priceSeries.pricesAreSplitAdjusted,
+        historicalFromCache: !!priceSeries.historicalFromCache,
+        estimatedFromFillsOnly: !!priceSeries.estimatedFromFillsOnly,
+        failureMessage: priceSeries.failureMessage || null,
+        splits,
+        corporateActionDiagnostics: priceSeries.corporateActionDiagnostics || [],
+      };
+    }
+    diagnostics.trace = {
+      dates: Object.fromEntries(traceByDate.entries()),
+      priceSeriesSummary,
+    };
+  }
+
   const unavailableReason = buildExportUnavailableReason(failures);
 
   if (!skipReconciliation && unavailableReason) {
@@ -2342,7 +2522,7 @@ async function buildImportedTotalReturnHistory({
   };
 }
 
-async function buildTotalReturnHistory({ skipReconciliation = false } = {}) {
+async function buildTotalReturnHistory({ skipReconciliation = false, traceDates = null } = {}) {
   const summary = db.prepare('SELECT * FROM account_summary WHERE id = 1').get();
   const accountCurrency = summary?.currency || 'GBP';
   const exportRows = db.prepare('SELECT * FROM t212_export_rows ORDER BY date_time ASC, row_index ASC').all();
@@ -2372,6 +2552,7 @@ async function buildTotalReturnHistory({ skipReconciliation = false } = {}) {
       positions,
       skipReconciliation,
       summary,
+      traceDates,
       transactions,
     });
   }
