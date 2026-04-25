@@ -1,10 +1,12 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Card, CardContent, Typography, Box, Dialog, DialogTitle,
   DialogContent, IconButton, Divider, List, ListItemButton, ListItemText,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Sector } from 'recharts';
+import { Chart } from '@highcharts/react';
+import 'highcharts/esm/modules/pattern-fill.src.js';
+import { formatCurrency } from '../utils/highchartsUtils';
 
 const COLORS = [
   '#5c6bc0', '#26c6da', '#66bb6a', '#ffa726', '#ef5350',
@@ -12,29 +14,245 @@ const COLORS = [
   '#d4e157', '#29b6f6', '#ff7043', '#9ccc65', '#26a69a',
 ];
 
+const PATTERN_PATHS = [
+  'M 0 0 L 6 6 M 5.5 -0.5 L 6.5 0.5 M -0.5 5.5 L 0.5 6.5',
+  'M 0 6 L 6 0 M -0.5 0.5 L 0.5 -0.5 M 5.5 6.5 L 6.5 5.5',
+  'M 2 0 L 2 6 M 5 0 L 5 6',
+  'M 0 2 L 6 2 M 0 5 L 6 5',
+  'M 3 0 L 3 6 M 0 3 L 6 3',
+  'M 1 1 L 5 5 M 5 1 L 1 5',
+  'M 3 3 m -2 0 a 2 2 0 1 1 4 0 a 2 2 0 1 1 -4 0',
+];
+
 const THRESHOLD = 0.015;
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function truncateLabel(value, maxLength = 14) {
+  const label = String(value ?? '');
+  return label.length > maxLength ? `${label.slice(0, maxLength)}...` : label;
+}
+
+function formatGbp(value) {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? formatCurrency(amount) : '-';
+}
+
+function getPatternColor(index) {
+  const baseColor = COLORS[index % COLORS.length];
+  const path = PATTERN_PATHS[index % PATTERN_PATHS.length];
+
+  return {
+    pattern: {
+      backgroundColor: baseColor,
+      path: {
+        d: path,
+        stroke: 'rgba(255,255,255,0.48)',
+        strokeWidth: 1.2,
+      },
+      width: 8,
+      height: 8,
+      opacity: 0.95,
+    },
+  };
+}
+
+function allocationTooltipFormatter() {
+  const point = this.point;
+  const name = escapeHtml(point?.name);
+  const value = Number(point?.y ?? 0);
+  const pct = point?.options?.custom?.pct ?? (
+    Number.isFinite(point?.percentage) ? point.percentage.toFixed(1) : '0.0'
+  );
+
+  return `
+    <b>${name}</b><br/>
+    ${formatCurrency(value)} (${pct}%)
+  `;
+}
 
 export default function AllocationPieChart({ positions }) {
   const [selectedSlice, setSelectedSlice] = useState(null);
   const [otherExpanded, setOtherExpanded] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(null);
-  const containerRef = useRef(null);
-  const labelDataRef = useRef([]);
-  const [chartSize, setChartSize] = useState({ width: 0, height: 0 });
 
-  useEffect(() => {
-    if (!containerRef.current) return;
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const { width, height } = entry.contentRect;
-        setChartSize({ width, height });
-      }
-    });
-    observer.observe(containerRef.current);
-    return () => observer.disconnect();
-  }, []);
+  const { total, smallPositions, chartData } = useMemo(() => {
+    const nextTotal = positions?.reduce((sum, position) => (
+      sum + (position.wallet_current_value || 0)
+    ), 0) || 0;
 
-  if (!positions || positions.length === 0) {
+    const positivePositions = (positions || []).filter(
+      (position) => position.wallet_current_value > 0
+    );
+
+    const mainPositions = positivePositions.filter(
+      (position) => nextTotal > 0 && position.wallet_current_value / nextTotal >= THRESHOLD
+    );
+    const nextSmallPositions = positivePositions.filter(
+      (position) => nextTotal > 0 && position.wallet_current_value / nextTotal < THRESHOLD
+    );
+
+    const nextData = mainPositions
+      .map((position) => ({
+        name: position.instrument_name || position.ticker,
+        value: position.wallet_current_value,
+        pct: nextTotal > 0 ? ((position.wallet_current_value / nextTotal) * 100).toFixed(1) : '0.0',
+        raw: position,
+      }))
+      .sort((a, b) => b.value - a.value);
+
+    if (nextSmallPositions.length > 0) {
+      const otherValue = nextSmallPositions.reduce(
+        (sum, position) => sum + position.wallet_current_value,
+        0
+      );
+
+      nextData.push({
+        name: `Other (${nextSmallPositions.length} holdings)`,
+        value: otherValue,
+        pct: nextTotal > 0 ? ((otherValue / nextTotal) * 100).toFixed(1) : '0.0',
+        isOther: true,
+        holdings: nextSmallPositions,
+      });
+    }
+
+    return {
+      total: nextTotal,
+      smallPositions: nextSmallPositions,
+      chartData: nextData.map((entry, index) => ({
+        name: entry.name,
+        y: entry.value,
+        color: getPatternColor(index),
+        custom: {
+          baseColor: COLORS[index % COLORS.length],
+          pct: entry.pct,
+          slice: entry,
+        },
+      })),
+    };
+  }, [positions]);
+
+  const chartOptions = useMemo(() => ({
+    chart: {
+      type: 'pie',
+      backgroundColor: 'transparent',
+      spacingTop: 8,
+      spacingRight: 8,
+      spacingBottom: 8,
+      spacingLeft: 8,
+    },
+    title: { text: null },
+    credits: { enabled: false },
+    legend: { enabled: false },
+    tooltip: {
+      useHTML: true,
+      formatter: allocationTooltipFormatter,
+    },
+    plotOptions: {
+      series: {
+        animation: { duration: 400 },
+      },
+      pie: {
+        allowPointSelect: false,
+        borderColor: '#111827',
+        borderWidth: 2,
+        center: ['50%', '50%'],
+        cursor: 'pointer',
+        innerSize: '56%',
+        showInLegend: false,
+        size: '77%',
+        slicedOffset: 6,
+        states: {
+          hover: {
+            brightness: 0.08,
+            halo: {
+              size: 8,
+              opacity: 0.16,
+            },
+          },
+        },
+        dataLabels: {
+          enabled: true,
+          allowOverlap: false,
+          connectorColor: 'rgba(255,255,255,0.34)',
+          connectorPadding: 3,
+          connectorShape: 'fixedOffset',
+          connectorWidth: 1,
+          crop: false,
+          distance: 14.3,
+          overflow: 'allow',
+          padding: 1,
+          softConnector: false,
+          style: {
+            color: '#e0e0e0',
+            fontSize: '10px',
+            fontWeight: '600',
+            textOutline: 'none',
+          },
+          formatter() {
+            const point = this.point;
+            const pct = point?.options?.custom?.pct ?? (
+              Number.isFinite(point?.percentage) ? point.percentage.toFixed(1) : '0.0'
+            );
+            return `${truncateLabel(point?.name)} ${pct}%`;
+          },
+        },
+        point: {
+          events: {
+            click() {
+              const slice = this.options?.custom?.slice;
+
+              if (!slice) {
+                return;
+              }
+
+              if (slice.isOther) {
+                setOtherExpanded(true);
+                setSelectedSlice(null);
+                return;
+              }
+
+              setSelectedSlice(slice);
+              setOtherExpanded(false);
+            },
+          },
+        },
+      },
+    },
+    series: [
+      {
+        type: 'pie',
+        name: 'Portfolio Allocation',
+        data: chartData,
+      },
+    ],
+    responsive: {
+      rules: [
+        {
+          condition: { maxWidth: 620 },
+          chartOptions: {
+            plotOptions: {
+              pie: {
+                size: '67%',
+                dataLabels: {
+                  distance: 10,
+                  style: { fontSize: '9px' },
+                },
+              },
+            },
+          },
+        },
+      ],
+    },
+  }), [chartData]);
+
+  if (!positions || positions.length === 0 || chartData.length === 0) {
     return (
       <Card sx={{ height: '100%' }}>
         <CardContent>
@@ -45,171 +263,6 @@ export default function AllocationPieChart({ positions }) {
     );
   }
 
-  const total = positions.reduce((s, p) => s + (p.wallet_current_value || 0), 0);
-
-  const mainPositions = positions.filter(
-    (p) => p.wallet_current_value > 0 && p.wallet_current_value / total >= THRESHOLD
-  );
-  const smallPositions = positions.filter(
-    (p) => p.wallet_current_value > 0 && p.wallet_current_value / total < THRESHOLD
-  );
-
-  const data = mainPositions
-    .map((p) => ({
-      name: p.instrument_name || p.ticker,
-      value: p.wallet_current_value,
-      pct: total > 0 ? ((p.wallet_current_value / total) * 100).toFixed(1) : 0,
-      raw: p,
-    }))
-    .sort((a, b) => b.value - a.value);
-
-  if (smallPositions.length > 0) {
-    const otherValue = smallPositions.reduce((s, p) => s + p.wallet_current_value, 0);
-    data.push({
-      name: `Other (${smallPositions.length} holdings)`,
-      value: otherValue,
-      pct: total > 0 ? ((otherValue / total) * 100).toFixed(1) : 0,
-      isOther: true,
-      holdings: smallPositions,
-    });
-  }
-
-  const CustomTooltip = ({ active, payload }) => {
-    if (!active || !payload || !payload[0]) return null;
-    const d = payload[0].payload;
-    return (
-      <Box sx={{ bgcolor: 'background.paper', p: 1.5, borderRadius: 1, border: '1px solid rgba(255,255,255,0.1)' }}>
-        <Typography variant="body2" fontWeight={600}>{d.name}</Typography>
-        <Typography variant="body2" color="text.secondary">
-          {d.value.toLocaleString('en-GB', { minimumFractionDigits: 2 })} ({d.pct}%)
-        </Typography>
-      </Box>
-    );
-  };
-
-  const handleSliceClick = (data) => {
-    if (data.isOther) {
-      setOtherExpanded(true);
-      setSelectedSlice(null);
-    } else {
-      setSelectedSlice(data);
-      setOtherExpanded(false);
-    }
-  };
-
-  const baseRadius = Math.min(chartSize.width * 0.32 * 1.1845, 120);
-  const outerR = Math.max(baseRadius, 70);
-  const innerR = Math.round(outerR * 0.54);
-
-  const renderActiveShape = (props) => {
-    const { cx, cy, innerRadius, outerRadius, startAngle, endAngle, fill } = props;
-    return (
-      <g style={{ filter: 'drop-shadow(0 0 6px rgba(0,0,0,0.4))' }}>
-        <Sector
-          cx={cx} cy={cy}
-          innerRadius={innerRadius - 3}
-          outerRadius={outerRadius + 10}
-          startAngle={startAngle} endAngle={endAngle}
-          fill={fill}
-        />
-      </g>
-    );
-  };
-
-  const RADIAN = Math.PI / 180;
-  const SMALL_THRESHOLD = 0.03;
-  const MIN_LABEL_GAP = 13;
-
-  const captureLabel = (props) => {
-    const { cx, cy, midAngle, outerRadius, index, name, pct, value } = props;
-
-    if (index === activeIndex) {
-      labelDataRef.current[index] = null;
-      return null;
-    }
-
-    const isSmall = total > 0 && value / total < SMALL_THRESHOLD;
-    const radialOffset = isSmall ? 44 : 22;
-
-    const cos = Math.cos(-RADIAN * midAngle);
-    const sin = Math.sin(-RADIAN * midAngle);
-
-    const sx = cx + outerRadius * cos;
-    const sy = cy + outerRadius * sin;
-    const mx = cx + (outerRadius + radialOffset) * cos;
-    const my = cy + (outerRadius + radialOffset) * sin;
-    const isRight = cos >= 0;
-    const ex = mx + (isRight ? 1 : -1) * 16;
-
-    labelDataRef.current[index] = {
-      index, cx, cy, midAngle, cos, sin,
-      sx, sy, mx, my, ex, ey: my,
-      isRight, isSmall,
-      name, pct, value,
-    };
-
-    return null;
-  };
-
-  const resolveCollisions = (positions) => {
-    const valid = positions.filter(Boolean);
-
-    ['right', 'left'].forEach((side) => {
-      const bucket = valid
-        .filter((p) => (side === 'right' ? p.isRight : !p.isRight))
-        .sort((a, b) => a.ey - b.ey);
-
-      for (let i = 1; i < bucket.length; i++) {
-        const prev = bucket[i - 1];
-        const curr = bucket[i];
-        const gap = curr.ey - prev.ey;
-        if (gap < MIN_LABEL_GAP) {
-          curr.ey += MIN_LABEL_GAP - gap;
-          curr.ex = curr.mx + (curr.isRight ? 1 : -1) * 16;
-        }
-      }
-    });
-
-    return valid;
-  };
-
-  const renderLabels = () => {
-    const raw = labelDataRef.current.filter((p, i) => p && i !== activeIndex);
-    const resolved = resolveCollisions(raw.map(p => ({ ...p })));
-
-    return resolved.map(({ index, sx, sy, mx, my, ex, ey, isRight, name, pct }) => {
-      const fill = COLORS[index % COLORS.length];
-      const textAnchor = isRight ? 'start' : 'end';
-      const textX = ex + (isRight ? 6 : -6);
-      const displayName = name.length > 14 ? name.slice(0, 14) + '…' : name;
-
-      return (
-        <g key={index}>
-          <path
-            d={`M${sx},${sy}L${mx},${my}L${ex},${ey}`}
-            stroke={fill} strokeWidth={1} fill="none" opacity={0.7}
-          />
-          <circle cx={ex} cy={ey} r={2} fill={fill} />
-          <text
-            x={textX} y={ey}
-            fontSize={10}
-            textAnchor={textAnchor}
-            dominantBaseline="central"
-            fill={fill}
-          >
-            {`${displayName} ${pct}%`}
-          </text>
-        </g>
-      );
-    });
-  };
-
-  const formatGbp = (val) =>
-    typeof val === 'number'
-      ? '£' + val.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-      : '—';
-
-  // Position detail dialog content
   const renderPositionDetail = (pos) => {
     if (!pos) return null;
     const currentValue = pos.wallet_current_value || 0;
@@ -263,39 +316,17 @@ export default function AllocationPieChart({ positions }) {
   };
 
   return (
-    <Card ref={containerRef} sx={{ height: '100%' }}>
-      <CardContent>
+    <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <CardContent sx={{ display: 'flex', flexDirection: 'column', flexGrow: 1 }}>
         <Typography variant="h6" gutterBottom>Portfolio Allocation</Typography>
-        <ResponsiveContainer width="100%" height={420}>
-          <PieChart>
-            <Pie
-              data={data}
-              cx={chartSize.width > 0 ? chartSize.width / 2 - 35 : '50%'}
-              cy="50%"
-              outerRadius={outerR}
-              innerRadius={innerR}
-              dataKey="value"
-              label={captureLabel}
-              labelLine={false}
-              style={{ cursor: 'pointer' }}
-              activeIndex={activeIndex}
-              activeShape={renderActiveShape}
-              onMouseEnter={(_, index) => setActiveIndex(index)}
-              onMouseLeave={() => setActiveIndex(null)}
-              onClick={handleSliceClick}
-            >
-              {data.map((_, i) => (
-                <Cell key={i} fill={COLORS[i % COLORS.length]} />
-              ))}
-            </Pie>
-            {/* Collision-resolved label layer rendered as PieChart sibling */}
-            <g>{chartSize.width > 0 && renderLabels()}</g>
-            <Tooltip content={<CustomTooltip />} />
-          </PieChart>
-        </ResponsiveContainer>
+        <Box sx={{ flexGrow: 1, minHeight: 420 }}>
+          <Chart
+            options={chartOptions}
+            containerProps={{ style: { width: '100%', height: '100%' } }}
+          />
+        </Box>
       </CardContent>
 
-      {/* Position detail dialog */}
       <Dialog
         open={!!selectedSlice}
         onClose={() => setSelectedSlice(null)}
@@ -319,7 +350,6 @@ export default function AllocationPieChart({ positions }) {
         )}
       </Dialog>
 
-      {/* Other holdings drill-down dialog */}
       <Dialog
         open={otherExpanded}
         onClose={() => setOtherExpanded(false)}
@@ -337,6 +367,7 @@ export default function AllocationPieChart({ positions }) {
         <DialogContent sx={{ px: 0 }}>
           <List disablePadding>
             {smallPositions
+              .slice()
               .sort((a, b) => b.wallet_current_value - a.wallet_current_value)
               .map((p) => {
                 const weight = total > 0 ? ((p.wallet_current_value / total) * 100).toFixed(1) : 0;
@@ -353,7 +384,7 @@ export default function AllocationPieChart({ positions }) {
                   >
                     <ListItemText
                       primary={p.instrument_name || p.ticker}
-                      secondary={`${formatGbp(p.wallet_current_value)}  ·  ${weight}%`}
+                      secondary={`${formatGbp(p.wallet_current_value)} \u00b7 ${weight}%`}
                     />
                   </ListItemButton>
                 );
