@@ -2,6 +2,20 @@
 
 Target audience: whoever (Codex, another assistant, future-you) picks this up next.
 
+## 2026-04-29 freshness note
+
+This handover is a historical record from the raw total-return debugging session.
+Several parts are now superseded by later drift/cache work, especially
+`docs/drift-findings-and-conclusion.md`,
+`docs/retros/2026-04-24-delisted-historical-price-cache.md`, and
+`docs/retros/2026-04-24-historical-total-return-drift-fix.md`.
+
+Current important corrections:
+- The raw `/total-return` page source still exists, but it is not active in the app UI unless routing/navigation are restored.
+- The four old fill-price fallback symbols (`ANSS`, `DARK`, `MAXR`, `STOR`) were later covered by manually imported cached historical prices.
+- Total-return split handling now uses Yahoo chart split events plus manual split overrides from `corporate_actions`. Stale TwelveData split rows should not override Yahoo.
+- Twelve Data `/splits` is a paid Grow+ endpoint and costs 20 credits per symbol. `/time_series` is 1 credit per symbol, but Basic/free coverage can still fail for delisted or non-US symbols.
+
 ## 1. Executive summary
 
 ### What the user asked for
@@ -15,6 +29,9 @@ A new page `/total-return` with a simpler two-line chart ("Total value" + "Net d
 The existing Dashboard chart ([client/src/components/PortfolioValueChart.jsx](../client/src/components/PortfolioValueChart.jsx)) and its endpoint `GET /api/history/total-return` are untouched — all Dashboard behaviour is preserved.
 
 ### Current state (end of session)
+
+Historical state at the end of this session only. For the current accepted drift
+state, see `docs/drift-findings-and-conclusion.md`.
 
 - **Reconstructed value:** £137,389
 - **T212 summary value:** £142,300
@@ -95,6 +112,10 @@ T212 API
                            NEW: merged splitsByDate in buildExportPriceSeries
                                  (DB splits override Yahoo on collision)
 ```
+
+Later correction: the reconstruction was changed after this handover to avoid
+letting stale TwelveData split rows override Yahoo. Current behavior is Yahoo
+chart splits plus manual DB split overrides only.
 
 ---
 
@@ -182,6 +203,8 @@ Researched data providers. Summary matrix:
 
 **Design choice:** add TwelveData as a backup corporate-actions feed on top of Yahoo. New schema, service, route, button. This turned out to be a dead end because TwelveData paywalled `/splits` — see Section 6.
 
+2026-04-29 correction: Twelve Data now lists `/splits` as Grow+ and 20 credits per symbol. The total-return service should not rely on TwelveData split rows for normal reconstruction; use Yahoo chart splits and manual split overrides.
+
 ### 3.6 Bug: the splits ARE in Yahoo but not being applied
 
 After TwelveData failed, we noticed the user still had LRCX mismatched. Ran a minimal test that called Yahoo's `chart()` directly for LRCX and got back:
@@ -231,11 +254,11 @@ Delta dropped from **9% → 3.45%**.
   - `buildHoldingDiagnostics` now returns ticker-level detail arrays (`staleHoldings`, `mismatchedHoldings`) alongside the counts, so the UI can show what's actually wrong.
   - Before calling `buildHoldingDiagnostics` in the imported path, holdings (keyed by `isin:XXX`) are resolved to the canonical ticker from `positions` via ISIN matching (Section 3.4).
   - `buildInstrumentLookup` iteration order reversed to `positions → orders → instruments` (Section 3.6).
-  - `buildExportPriceSeries` now merges `getChartSplitsByDate(chart)` (Yahoo) with `getMergedSplitsByDate(t212Ticker)` (DB cache). DB-cached splits win on collision (manual > twelvedata > yahoo priority).
+  - Historical note: at this point `buildExportPriceSeries` merged `getChartSplitsByDate(chart)` (Yahoo) with `getMergedSplitsByDate(t212Ticker)` (DB cache). This was later changed so current reconstruction uses Yahoo chart splits plus manual DB split overrides only.
 
 - [server/services/corporateActionsService.js](../server/services/corporateActionsService.js) — NEW. TwelveData client, cache, and merge helper. Exports:
   - `refreshSplitsForTickers(tickers, { maxAgeDays })` — batch fetch with rate-limit throttling (200 ms spacing). Skips tickers fetched within `maxAgeDays`.
-  - `getMergedSplitsByDate(ticker)` — reads cached splits with source priority (manual > twelvedata > yahoo).
+  - `getMergedSplitsByDate(ticker)` — historical helper that reads cached splits with source priority (manual > twelvedata > yahoo). Current total-return reconstruction imports `getManualSplitOverridesByDate` instead.
   - `t212ToTwelveDataSymbol(ticker)` — maps T212 tickers to TwelveData's `SYMBOL:EXCHANGE` format via Yahoo-normalized intermediate.
   - Freshness tracking via `sync_state` keys like `corporate_actions_fetched:twelvedata:LRCX_US_EQ`.
 
@@ -280,6 +303,11 @@ This is a known artefact of using adjclose. It doesn't affect the latest-date de
 
 ### 5.2 Source priority in `corporate_actions` table
 
+2026-04-29 correction: this subsection describes the earlier implementation.
+Current total-return reconstruction reads only manual split overrides from
+`corporate_actions` and combines them with Yahoo chart splits. Stale TwelveData
+split rows should not override Yahoo split data.
+
 `getMergedSplitsByDate(ticker)` reads all rows for a ticker and collapses by `action_date`, keeping the highest-priority source:
 
 ```
@@ -319,6 +347,9 @@ In `buildEvents`, if `depositFillRows` is passed (only when `skipReconciliation`
 
 ### 6.1 TwelveData `/splits` is paywalled on the free tier
 
+2026-04-29 correction: Twelve Data lists `/splits` as a Grow+ endpoint with a
+20-credit-per-symbol cost. Treat it as paid, not as a Basic/free fallback.
+
 Pre-flight research (web searches of TwelveData pricing pages) suggested `/splits` was included in the free tier. Runtime testing revealed otherwise:
 
 ```
@@ -332,7 +363,7 @@ Lesson: for any third-party integration, do a five-minute smoke test (literally 
 The code (service, route, button, table, `.env` key plumbing) is still in place and functional — just returns `failed: 100` with the error message on every click. Three options going forward:
 1. **Leave** — zero-cost future-proofing if you ever upgrade.
 2. **Remove** — Section 5 in "Next steps" has a cleanup list.
-3. **Repurpose for `/time_series`** — that endpoint IS free on TwelveData's basic tier. Could close most of the remaining 3.45% by replacing the 4 fill-fallback tickers' fill-price proxies with real historical prices. See Section 8.
+3. **Repurpose for `/time_series`** — that endpoint costs 1 credit per symbol and was later tried for historical prices. Basic/free coverage can still miss delisted or non-US symbols, so manual CSV import remains the reliable fallback.
 
 ### 6.2 Refresh button alert kept disappearing
 
@@ -350,7 +381,7 @@ Lesson: when JSON.stringify is involved, Date objects render as ISO strings but 
 
 ## 7. What the user should verify after handover
 
-1. **Reload `/total-return` in the browser.** Expect delta ~3.45%, mismatched count 1 (HON), stale count ~5, fill-fallback count 4.
+1. **Historical instruction only.** `/total-return` is no longer active in the app UI unless routing/navigation are restored. For current drift expectations, use `docs/drift-findings-and-conclusion.md`.
 2. **Sanity-check the Dashboard.** The original `PortfolioValueChart` should be unchanged. If T212's 2% gate is still being tripped on the Dashboard (which it likely is, since reconstruction is 3.45% off), the Dashboard will show the "Total return history is unavailable..." message — this is expected and intentional. Only `/total-return` bypasses it.
 3. **Query the DB directly to confirm listing-priority fix landed.**
    ```sql
@@ -390,11 +421,17 @@ Expected delta drop: ~0.3-0.5%.
 
 ### 8.2 HIGH impact / MEDIUM effort: historical prices for the 4 fill-fallback tickers
 
+2026-04-29 correction: this follow-up was later implemented. See
+`docs/retros/2026-04-24-delisted-historical-price-cache.md`. The four delisted
+symbols were covered by manually imported cached historical prices, and the raw
+diagnostic output later reported them under `historicalPriceSymbols` instead of
+`estimatedSymbols`.
+
 STOR (STORE Capital), MAXR (Maxar Technologies), DARK (Darktrace), ANSS (ANSYS) all return "symbol may be delisted" from Yahoo. The reconstruction falls back to the user's fill price — frozen at purchase time — which is stale. All four have appreciated or depreciated since purchase, so the reconstruction under- or over-values them.
 
 Fix options:
 
-- **TwelveData `/time_series`** — free tier, 1 credit per call regardless of outputsize. For 4 tickers × one-time backfill = 4 credits. Incremental daily updates = 4 credits/day. Sustainable.
+- **TwelveData `/time_series`** — 1 credit per symbol. Basic/free coverage can still fail for delisted or non-US symbols, so manual CSV import remains the reliable fallback.
 - **Alpha Vantage free tier** — 5 calls/min, 500 calls/day. Works.
 - **Manual anchor** — look up current prices, insert a daily `close_price` override manually. Not scalable but fastest.
 
@@ -545,8 +582,8 @@ yf.chart('LRCX', {
 - **Language:** Node.js backend (CommonJS), React 18 / Vite frontend, SQLite (better-sqlite3) cache.
 - **T212 is the source of truth** for orders, positions, transactions, dividends. Data is mirrored into SQLite on sync.
 - **Yahoo Finance** (via `yahoo-finance2`) provides market prices + split events. This was the *only* free data source that actually worked for splits during the session.
-- **TwelveData** was added as a belt-and-braces corporate-actions feed. Turned out `/splits` is paywalled on the free tier. Infra remains but nothing lands in the cache table on clicks.
-- **Manual override** slot exists in the `corporate_actions` table with highest priority. No UI for it yet.
+- **TwelveData** was added as a belt-and-braces corporate-actions feed. Current docs list `/splits` as Grow+ and 20 credits per symbol. The current reconstruction should not let stale TwelveData split rows override Yahoo.
+- **Manual override** split rows in `corporate_actions` remain the intended DB override path. Current reconstruction combines Yahoo chart splits with manual overrides only.
 - **Two reconstruction paths** in `totalReturnService.js`:
   - **Imported path** — used when `t212_export_rows` is non-empty. Full CSV history + API orders/transactions/dividends + Yahoo prices + splits. Has `applySplitEvents`. The primary path today.
   - **API-only path** — fallback. No splits. Previously the primary path; now mostly dormant. Still includes the deposit-backfill from exports added earlier.

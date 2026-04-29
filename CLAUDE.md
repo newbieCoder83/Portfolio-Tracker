@@ -5,7 +5,7 @@ Personal full-stack portfolio tracker for Trading 212 (T212) accounts. Built by 
 
 ## Tech Stack
 - **Backend:** Node.js + Express (`server/`), better-sqlite3, axios
-- **Frontend:** React 18 + Vite (`client/`), MUI 5, Recharts
+- **Frontend:** React 18 + Vite (`client/`), MUI 5, Highcharts, Highcharts Grid Lite, Recharts for the heatmap treemap
 - **Database:** SQLite at `./data/portfolio.db`
 - **Encryption:** AES-256-GCM, key at `./data/.enc_key`
 
@@ -24,6 +24,15 @@ Production: Express (:3000) serves client/dist + handles /api routes
 
 ## API Reference
 All T212 field names and schemas come from `docs/t212-api-reference.md`. This is the single source of truth — never guess field names.
+
+## External Docs Freshness
+Last checked against public sources on 2026-04-29.
+
+- Trading 212 docs/OpenAPI: `docs/t212-api-reference.md` is the project source of truth. Official Pies endpoints still exist but are deprecated and unused by this app.
+- Yahoo Finance access: this app uses the JavaScript `yahoo-finance2` package, not Python `yfinance`. Latest checked package versions were `yahoo-finance2@3.14.0` and Python `yfinance@1.3.0`.
+- Yahoo Finance warning: `yahoo-finance2` and `yfinance` are unofficial Yahoo Finance access libraries. Treat Yahoo data as best-effort market data that can change, be incomplete, or fail without notice.
+- Highcharts packages: latest checked versions were `highcharts@12.6.0`, `@highcharts/react@4.2.1`, `@highcharts/grid-lite-react@1.0.0`, and `@highcharts/grid-lite@2.3.1`.
+- Twelve Data: `/splits` is a paid Grow+ endpoint and costs 20 credits per symbol. `/time_series` is 1 credit per symbol, but Basic/free coverage may not include old delisted or non-US symbols; manual CSV import remains the reliable fallback for those.
 
 ## Commands
 ```bash
@@ -64,7 +73,7 @@ client/src/
   pages/LoginPage.jsx     # Login form
   pages/DashboardPage.jsx # Main dashboard (fetches 5 endpoints in parallel)
   pages/HeatmapPage.jsx   # Treemap heatmap with sector/industry/stock depth
-  components/             # Charts and tables (Recharts + MUI)
+  components/             # Highcharts charts/tables, Recharts heatmap, MUI shells
 ```
 
 ## Sync Flow
@@ -93,7 +102,7 @@ The second line is dead code — the frontend calls `GET /api/sync/snapshots`, n
 **Fix:** Remove the second line only. Do not change `sync.js`.
 
 ## Adding a New Chart
-1. Create `client/src/components/MyChart.jsx` using Recharts
+1. Create `client/src/components/MyChart.jsx` using Highcharts unless the chart is specifically a heatmap treemap that matches the existing Recharts heatmap
 2. Import in `DashboardPage.jsx`, add to the `Promise.all` fetch block if new data needed
 3. Add to the MUI Grid layout in `DashboardPage.jsx`
 

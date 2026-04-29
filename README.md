@@ -6,9 +6,9 @@ A full-stack portfolio tracking dashboard that connects to the Trading 212 API. 
 
 - **Real-time portfolio view** — positions, P/L, allocation, and summary cards
 - **Benchmark comparison** — track your portfolio against VUSA (12%/yr) and VHYL (8%/yr) simulations
-- **Dividend analytics** — monthly breakdown with drill-down, by-company chart, yield per position, full history table
-- **Drawdown tracking** — visualise peak-to-trough drawdowns over time
-- **Portfolio value history** — daily snapshots charted over time
+- **Dividend analytics** — monthly breakdown with drill-down, by-company chart, and full history table
+- **Portfolio heatmap** — sector/industry/stock treemap built from Yahoo Finance enrichment
+- **Total return history** — reconstructed value and net deposits from Trading 212 history, Yahoo prices, and cached historical prices where needed
 - **Incremental sync** — only fetches new data on subsequent syncs
 - **Encrypted credentials** — API keys stored with AES-256-GCM, never in plaintext
 - **Auto-login** — restores session from saved encrypted credentials on restart
@@ -47,7 +47,7 @@ npm start
 ## Tech Stack
 
 - **Backend:** Node.js, Express, better-sqlite3, axios
-- **Frontend:** React 18, Material UI 5, Recharts
+- **Frontend:** React 18, Material UI 5, Highcharts, Highcharts Grid Lite, Recharts for the heatmap treemap
 - **Build:** Vite
 - **Database:** SQLite (stored in `./data/portfolio.db`, gitignored)
 - **Encryption:** AES-256-GCM via Node.js crypto
@@ -59,3 +59,9 @@ All data is stored locally in `./data/portfolio.db`. The encryption key is store
 ## API Reference
 
 See [docs/t212-api-reference.md](docs/t212-api-reference.md) for the complete Trading 212 API documentation used by this project.
+
+## External Data Notes
+
+- Trading 212 field names and endpoint shapes are documented in `docs/t212-api-reference.md`, verified against the official OpenAPI on 2026-04-29.
+- Yahoo Finance data is fetched through the JavaScript `yahoo-finance2` package, checked at `3.14.0`. Python `yfinance` was checked at `1.3.0`, but this repo does not use it. These are unofficial Yahoo Finance access libraries, so market data can be incomplete or change without notice.
+- Highcharts package versions were current when checked on 2026-04-29: `highcharts@12.6.0`, `@highcharts/react@4.2.1`, `@highcharts/grid-lite-react@1.0.0`, and `@highcharts/grid-lite@2.3.1`.

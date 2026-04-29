@@ -4,7 +4,7 @@
 > Do NOT use training data, wrapper libraries, or guessed field names.
 > Every field name, nesting structure, and rate limit below comes directly
 > from the official docs at https://docs.trading212.com and the downloadable
-> OpenAPI description, verified on 2026-04-23.
+> OpenAPI description, verified on 2026-04-29.
 
 ---
 
@@ -132,6 +132,10 @@ All list endpoints (dividends, orders, transactions) use **cursor-based paginati
 ---
 
 ## Endpoints
+
+The official OpenAPI currently also lists deprecated Pies endpoints under
+`/api/v0/equity/pies`. This project does not use Pies. Do not add or call those
+endpoints unless a future task explicitly asks for Pies support.
 
 ---
 
@@ -338,7 +342,9 @@ Fetch historical order data. Paginated. **Response has a nested structure with `
           "taxes": [
             {
               "chargedAt": "2023-03-15T10:01:00Z",
-              "name": "STAMP_DUTY"
+              "currency": "GBP",
+              "name": "STAMP_DUTY",
+              "quantity": 10.68
             }
           ]
         }
@@ -417,7 +423,9 @@ Fetch historical order data. Paginated. **Response has a nested structure with `
 | `fill.walletImpact.realisedProfitLoss` | number | Realised P/L from this fill |
 | `fill.walletImpact.taxes` | array | Array of tax objects |
 | `fill.walletImpact.taxes[].chargedAt` | string | When tax was charged |
+| `fill.walletImpact.taxes[].currency` | string | Tax currency |
 | `fill.walletImpact.taxes[].name` | string | Enum: "COMMISSION_TURNOVER", "CURRENCY_CONVERSION_FEE", "FINRA_FEE", "FRENCH_TRANSACTION_TAX", "PTM_LEVY", "STAMP_DUTY", "STAMP_DUTY_RESERVE_TAX", "TRANSACTION_FEE" |
+| `fill.walletImpact.taxes[].quantity` | number | Tax amount |
 
 ---
 
@@ -608,9 +616,12 @@ Place a limit order.
   "ticker": "AAPL_US_EQ",
   "quantity": 10.0,
   "limitPrice": 150.00,
-  "timeInForce": "GOOD_TILL_CANCEL"
+  "timeValidity": "GOOD_TILL_CANCEL"
 }
 ```
+
+The request field is `timeValidity`. Returned order objects use
+`timeInForce`.
 
 ---
 
@@ -627,9 +638,12 @@ Place a stop order (triggers market order at stop price).
   "ticker": "AAPL_US_EQ",
   "quantity": -10.0,
   "stopPrice": 130.00,
-  "timeInForce": "GOOD_TILL_CANCEL"
+  "timeValidity": "GOOD_TILL_CANCEL"
 }
 ```
+
+The request field is `timeValidity`. Returned order objects use
+`timeInForce`.
 
 ---
 
@@ -647,9 +661,12 @@ Place a stop-limit order.
   "quantity": 10.0,
   "stopPrice": 155.00,
   "limitPrice": 156.00,
-  "timeInForce": "GOOD_TILL_CANCEL"
+  "timeValidity": "GOOD_TILL_CANCEL"
 }
 ```
+
+The request field is `timeValidity`. Returned order objects use
+`timeInForce`.
 
 ---
 
@@ -675,6 +692,38 @@ List generated CSV reports and their status.
 
 **Rate limit:** 1 req / 60s
 
+**Response 200:** array of `ReportResponse` objects.
+
+```json
+{
+  "dataIncluded": {
+    "includeDividends": true,
+    "includeInterest": true,
+    "includeOrders": true,
+    "includeTransactions": true
+  },
+  "downloadLink": "https://...",
+  "reportId": 123456,
+  "status": "Finished",
+  "timeFrom": "2024-01-01T00:00:00Z",
+  "timeTo": "2024-12-31T23:59:59Z"
+}
+```
+
+**Field details:**
+
+| Field | Type | Description |
+|---|---|---|
+| `dataIncluded.includeDividends` | boolean | Whether dividends are included |
+| `dataIncluded.includeInterest` | boolean | Whether interest rows are included |
+| `dataIncluded.includeOrders` | boolean | Whether order rows are included |
+| `dataIncluded.includeTransactions` | boolean | Whether cash transaction rows are included |
+| `downloadLink` | string\|null | Temporary download URL when the report is finished |
+| `reportId` | integer | Generated report identifier |
+| `status` | string | Report generation status, e.g. `"Finished"` |
+| `timeFrom` | string | Report start timestamp |
+| `timeTo` | string | Report end timestamp |
+
 **Workflow:**
 1. POST /api/v0/equity/history/exports to request a report -> get `reportId`
 2. GET /api/v0/equity/history/exports periodically to check status
@@ -687,6 +736,31 @@ List generated CSV reports and their status.
 Request generation of a CSV report.
 
 **Rate limit:** 1 req / 30s
+
+**Request body:** `PublicReportRequest`.
+
+```json
+{
+  "dataIncluded": {
+    "includeDividends": true,
+    "includeInterest": true,
+    "includeOrders": true,
+    "includeTransactions": true
+  },
+  "timeFrom": "2024-01-01T00:00:00Z",
+  "timeTo": "2024-12-31T23:59:59Z"
+}
+```
+
+`dataIncluded` is a `ReportDataIncluded` object.
+
+**Response 200:** `EnqueuedReportResponse`.
+
+```json
+{
+  "reportId": 123456
+}
+```
 
 ---
 
@@ -715,3 +789,5 @@ All endpoints can return:
 7. **The `walletImpact` object** appears in both positions and order fills but with different fields. In positions: `{ currency, currentValue, fxImpact, totalCost, unrealizedProfitLoss }`. In fills: `{ currency, fxRate, netValue, realisedProfitLoss, taxes }`.
 8. **Instruments endpoint** is rate-limited to 1 request per 50 seconds - cache aggressively.
 9. **Dividend `paidOn` is documented as `date-time` in the current OpenAPI spec.** If the UI only wants `YYYY-MM-DD`, normalise it at the display layer instead of assuming the API will always send a date-only string.
+10. **Order placement requests use `timeValidity`, but order responses use `timeInForce`.** Do not copy the response field name into request bodies.
+11. **Pies endpoints are deprecated in the official docs and unused here.** Keep this reference focused on the endpoints the app actually calls.
